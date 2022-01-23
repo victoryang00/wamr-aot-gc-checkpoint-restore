@@ -4308,6 +4308,20 @@ fail:
 
 #if WASM_ENABLE_FAST_INTERP != 0
 
+static char *
+get_opcode_name(uint8 opcode)
+{
+/* clang-format off */
+#define HANDLE_OPCODE(op) #op
+DEFINE_GOTO_TABLE(char *, op_names);
+#undef HANDLE_OPCODE
+    /* clang-format on */
+    char *name = op_names[opcode];
+    if (strstr(name, "WASM_OP_"))
+        name += 8;
+    return name;
+}
+
 #if WASM_DEBUG_PREPROCESSOR != 0
 #define LOG_OP(...) os_printf(__VA_ARGS__)
 #else
@@ -4778,7 +4792,7 @@ fail:
 #define emit_label(opcode)                                      \
     do {                                                        \
         wasm_loader_emit_ptr(loader_ctx, handle_table[opcode]); \
-        LOG_OP("\nemit_op [%02x]\t", opcode);                   \
+        LOG_OP("\n%s\t", get_opcode_name(opcode));              \
     } while (0)
 #define skip_label()                                            \
     do {                                                        \
@@ -4796,7 +4810,7 @@ fail:
             goto fail;                                                         \
         }                                                                      \
         wasm_loader_emit_int16(loader_ctx, offset);                            \
-        LOG_OP("\nemit_op [%02x]\t", opcode);                                  \
+        LOG_OP("\n%s\t", get_opcode_name(opcode));                             \
     } while (0)
 #define skip_label()                                           \
     do {                                                       \
@@ -4808,7 +4822,7 @@ fail:
 #define emit_label(opcode)                          \
     do {                                            \
         wasm_loader_emit_uint8(loader_ctx, opcode); \
-        LOG_OP("\nemit_op [%02x]\t", opcode);       \
+        LOG_OP("\n%s\t", get_opcode_name(opcode));  \
     } while (0)
 #define skip_label()                                           \
     do {                                                       \
