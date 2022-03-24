@@ -753,7 +753,7 @@ register_module_with_null_name(WASMModuleCommon *module_common, char *error_buf,
 }
 
 WASMModuleCommon *
-wasm_runtime_load(const uint8 *buf, uint32 size, char *error_buf,
+wasm_runtime_load(uint8 *buf, uint32 size, char *error_buf,
                   uint32 error_buf_size)
 {
     WASMModuleCommon *module_common = NULL;
@@ -1309,7 +1309,8 @@ wasm_runtime_finalize_call_function(WASMExecEnv *exec_env,
 
     bh_assert((argv && ret_argv) || (argc == 0));
 
-    if (argv == ret_argv) {
+    if (argv == ret_argv || argc == 0) {
+        /* no need to transfrom externref results */
         return true;
     }
 
@@ -2398,7 +2399,7 @@ wasm_runtime_init_wasi(WASMModuleInstanceCommon *module_inst,
         address = strtok(cp, "/");
         mask = strtok(NULL, "/");
 
-        ret = addr_pool_insert(apool, address, (uint8)(atoi(mask)));
+        ret = addr_pool_insert(apool, address, (uint8)(mask ? atoi(mask) : 0));
         wasm_runtime_free(cp);
         if (!ret) {
             set_error_buf(error_buf, error_buf_size,
