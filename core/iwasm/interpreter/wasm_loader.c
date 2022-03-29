@@ -229,6 +229,24 @@ is_64bit_type(uint8 type)
     return false;
 }
 
+#if WASM_ENABLE_FAST_INTERP != 0
+static bool
+is_int_type(uint8 type)
+{
+    if (type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64)
+        return true;
+    return false;
+}
+
+static bool
+is_float_type(uint8 type)
+{
+    if (type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64)
+        return true;
+    return false;
+}
+#endif
+
 static bool
 is_value_type(uint8 type)
 {
@@ -4415,15 +4433,15 @@ typedef struct WASMLoaderContext {
     uint8 *p_code_compiled_label;
     uint32 code_compiled_size_label;
 
-    uint8 cur_i_opnd_idx;
-    uint8 acc_i64_status;
-    int16 acc_i64_opnd_offset;
-    bool acc_i64_is_dirty;
+    uint8 cur_int_opnd_idx;
+    uint8 int_acc_status;
+    int16 int_acc_opnd_offset;
+    bool int_acc_is_dirty;
 
-    uint8 cur_f_opnd_idx;
-    uint8 acc_f64_status;
-    int16 acc_f64_opnd_offset;
-    bool acc_f64_is_dirty;
+    uint8 cur_float_opnd_idx;
+    uint8 float_acc_status;
+    int16 float_acc_opnd_offset;
+    bool float_acc_is_dirty;
 #endif
 } WASMLoaderContext;
 
@@ -4939,6 +4957,9 @@ fail:
         LOG_OP("%d\t", value);               \
     } while (0)
 
+static void
+clear_acc_info(WASMLoaderContext *loader_ctx);
+
 static bool
 wasm_loader_ctx_reinit(WASMLoaderContext *ctx)
 {
@@ -4965,6 +4986,8 @@ wasm_loader_ctx_reinit(WASMLoaderContext *ctx)
 
     /* init preserved local offsets */
     ctx->preserved_local_offset = ctx->max_dynamic_offset;
+
+    clear_acc_info(ctx);
 
     /* const buf is reserved */
     return true;
@@ -5067,16 +5090,34 @@ wasm_loader_emit_backspace(WASMLoaderContext *ctx, uint32 size)
     }
 }
 
+static bool
+acc_int_opnd_offset_is_local_offset(WASMLoaderContext *loader_ctx)
+{
+    if (loader_ctx->int_acc_opnd_offset >= 0
+        && loader_ctx->int_acc_opnd_offset < loader_ctx->start_dynamic_offset)
+        return true;
+    return false;
+}
+
+static bool
+acc_float_opnd_offset_is_local_offset(WASMLoaderContext *loader_ctx)
+{
+    if (loader_ctx->float_acc_opnd_offset >= 0
+        && loader_ctx->float_acc_opnd_offset < loader_ctx->start_dynamic_offset)
+        return true;
+    return false;
+}
+
 static void
 clear_acc_info(WASMLoaderContext *loader_ctx)
 {
-    loader_ctx->acc_i64_status = ACC_UNUSED;
-    loader_ctx->acc_i64_opnd_offset = 0;
-    loader_ctx->acc_i64_is_dirty = 0;
+    loader_ctx->int_acc_status = ACC_UNUSED;
+    loader_ctx->int_acc_opnd_offset = 0;
+    loader_ctx->int_acc_is_dirty = 0;
 
-    loader_ctx->acc_f64_status = ACC_UNUSED;
-    loader_ctx->acc_f64_opnd_offset = 0;
-    loader_ctx->acc_f64_is_dirty = 0;
+    loader_ctx->float_acc_status = ACC_UNUSED;
+    loader_ctx->float_acc_opnd_offset = 0;
+    loader_ctx->float_acc_is_dirty = 0;
 }
 
 static void
@@ -5086,98 +5127,91 @@ emit_load_acc(WASMLoaderContext *loader_ctx, uint8 type, int16 operand_offset)
     emit_operand(loader_ctx, type);
     emit_operand(loader_ctx, operand_offset);
 
-    if (type == VALUE_TYPE_I32) {
-        loader_ctx->acc_i64_status = ACC_AS_I32;
-    }
-    else if (type == VALUE_TYPE_I64) {
-        loader_ctx->acc_i64_status = ACC_AS_I64;
-    }
-    else if (type == VALUE_TYPE_F32) {
-        loader_ctx->acc_f64_status = ACC_AS_F32;
-    }
-    else if (type == VALUE_TYPE_F64) {
-        loader_ctx->acc_f64_status = ACC_AS_F64;
-    }
-    else {
-        bh_assert(0);
+    switch (type) {
+        case VALUE_TYPE_I32:
+            loader_ctx->int_acc_status = ACC_AS_I32;
+            break;
+        case VALUE_TYPE_I64:
+            loader_ctx->int_acc_status = ACC_AS_I64;
+            break;
+        case VALUE_TYPE_F32:
+            loader_ctx->float_acc_status = ACC_AS_F32;
+            break;
+        case VALUE_TYPE_F64:
+            loader_ctx->float_acc_status = ACC_AS_F64;
+            break;
+        default:
+            bh_assert(0);
+            break;
     }
 
-    if (type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64) {
-        loader_ctx->acc_i64_opnd_offset = operand_offset;
-        loader_ctx->acc_i64_is_dirty = false;
+    if (is_int_type(type)) {
+        loader_ctx->int_acc_opnd_offset = operand_offset;
+        loader_ctx->int_acc_is_dirty = false;
     }
     else {
-        loader_ctx->acc_f64_opnd_offset = operand_offset;
-        loader_ctx->acc_f64_is_dirty = false;
+        loader_ctx->float_acc_opnd_offset = operand_offset;
+        loader_ctx->float_acc_is_dirty = false;
     }
-    loader_ctx->p_code_compiled_label = loader_ctx->p_code_compiled;
 }
 
 static void
 emit_store_acc(WASMLoaderContext *loader_ctx, uint8 type)
 {
-    if ((type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64)
-        && loader_ctx->acc_i64_is_dirty) {
-        if (loader_ctx->acc_i64_status == ACC_AS_I32
-            || loader_ctx->acc_i64_status == ACC_AS_I32_POPPED) {
-            emit_label(EXT_OP_STORE_ACC);
+    if (is_int_type(type) && loader_ctx->int_acc_is_dirty) {
+        emit_label(EXT_OP_STORE_ACC);
+        if (loader_ctx->int_acc_status == ACC_AS_I32
+            || loader_ctx->int_acc_status == ACC_AS_I32_POPPED) {
             emit_operand(loader_ctx, VALUE_TYPE_I32);
-            emit_operand(loader_ctx, loader_ctx->acc_i64_opnd_offset);
         }
-        else if (loader_ctx->acc_i64_status == ACC_AS_I64
-                 || loader_ctx->acc_i64_status == ACC_AS_I64_POPPED) {
-            emit_label(EXT_OP_STORE_ACC);
+        else if (loader_ctx->int_acc_status == ACC_AS_I64
+                 || loader_ctx->int_acc_status == ACC_AS_I64_POPPED) {
             emit_operand(loader_ctx, VALUE_TYPE_I64);
-            emit_operand(loader_ctx, loader_ctx->acc_i64_opnd_offset);
         }
         else {
             bh_assert(0);
         }
-        loader_ctx->acc_i64_is_dirty = false;
+        emit_operand(loader_ctx, loader_ctx->int_acc_opnd_offset);
+        loader_ctx->int_acc_is_dirty = false;
     }
-    else if ((type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64)
-             && loader_ctx->acc_f64_is_dirty) {
-        if (loader_ctx->acc_f64_status == ACC_AS_F32
-            || loader_ctx->acc_f64_status == ACC_AS_F32_POPPED) {
-            emit_label(EXT_OP_STORE_ACC);
+    else if (is_float_type(type) && loader_ctx->float_acc_is_dirty) {
+        emit_label(EXT_OP_STORE_ACC);
+        if (loader_ctx->float_acc_status == ACC_AS_F32
+            || loader_ctx->float_acc_status == ACC_AS_F32_POPPED) {
             emit_operand(loader_ctx, VALUE_TYPE_F32);
-            emit_operand(loader_ctx, loader_ctx->acc_f64_opnd_offset);
         }
-        else if (loader_ctx->acc_f64_status == ACC_AS_F64
-                 || loader_ctx->acc_f64_status == ACC_AS_F64_POPPED) {
-            emit_label(EXT_OP_STORE_ACC);
+        else if (loader_ctx->float_acc_status == ACC_AS_F64
+                 || loader_ctx->float_acc_status == ACC_AS_F64_POPPED) {
             emit_operand(loader_ctx, VALUE_TYPE_F64);
-            emit_operand(loader_ctx, loader_ctx->acc_f64_opnd_offset);
         }
         else {
             bh_assert(0);
         }
-        loader_ctx->acc_f64_is_dirty = false;
+        emit_operand(loader_ctx, loader_ctx->float_acc_opnd_offset);
+        loader_ctx->float_acc_is_dirty = false;
     }
 }
 
 static bool
-can_pop_op_from_acc(WASMLoaderContext *loader_ctx, uint8 type)
+can_pop_opnd_from_acc(WASMLoaderContext *loader_ctx, uint8 type)
 {
-    if ((type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64)
-        && (loader_ctx->cur_i_opnd_idx == 0))
+    if (is_int_type(type) && (loader_ctx->cur_int_opnd_idx == 0))
         return true;
-    if ((type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64)
-        && (loader_ctx->cur_f_opnd_idx == 0))
+    if (is_float_type(type) && (loader_ctx->cur_float_opnd_idx == 0))
         return true;
     return false;
 }
 
 static void
-pop_op_from_acc(WASMLoaderContext *loader_ctx, uint8 type, int16 operand_offset)
+pop_opnd_from_acc(WASMLoaderContext *loader_ctx, uint8 type,
+                  int16 operand_offset)
 {
     uint8 buf[16];
     uint32 size;
 
-    if (((loader_ctx->acc_i64_status == ACC_UNUSED)
-         && (type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64))
-        || ((loader_ctx->acc_f64_status == ACC_UNUSED)
-            && (type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64))) {
+    if (((loader_ctx->int_acc_status == ACC_UNUSED) && is_int_type(type))
+        || ((loader_ctx->float_acc_status == ACC_UNUSED)
+            && is_float_type(type))) {
         if (loader_ctx->p_code_compiled == NULL) {
             size = loader_ctx->code_compiled_size
                    - loader_ctx->code_compiled_size_label;
@@ -5200,55 +5234,52 @@ pop_op_from_acc(WASMLoaderContext *loader_ctx, uint8 type, int16 operand_offset)
             loader_ctx->p_code_compiled += size;
         }
     }
-    else if (operand_offset == loader_ctx->acc_i64_opnd_offset
-             && (type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64)) {
+    else if (operand_offset == loader_ctx->int_acc_opnd_offset
+             && is_int_type(type)) {
         if (type == VALUE_TYPE_I32) {
-            bh_assert(loader_ctx->acc_i64_status == ACC_AS_I32
-                      || loader_ctx->acc_i64_status == ACC_AS_I32_POPPED);
-            loader_ctx->acc_i64_status = ACC_AS_I32_POPPED;
+            bh_assert(loader_ctx->int_acc_status == ACC_AS_I32
+                      || loader_ctx->int_acc_status == ACC_AS_I32_POPPED);
+            loader_ctx->int_acc_status = ACC_AS_I32_POPPED;
         }
         else if (type == VALUE_TYPE_I64) {
-            bh_assert(loader_ctx->acc_i64_status == ACC_AS_I64
-                      || loader_ctx->acc_i64_status == ACC_AS_I64_POPPED);
-            loader_ctx->acc_i64_status = ACC_AS_I64_POPPED;
+            bh_assert(loader_ctx->int_acc_status == ACC_AS_I64
+                      || loader_ctx->int_acc_status == ACC_AS_I64_POPPED);
+            loader_ctx->int_acc_status = ACC_AS_I64_POPPED;
         }
     }
-    else if (operand_offset == loader_ctx->acc_f64_opnd_offset
-             && (type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64)) {
+    else if (operand_offset == loader_ctx->float_acc_opnd_offset
+             && is_float_type(type)) {
         if (type == VALUE_TYPE_F32) {
-            bh_assert(loader_ctx->acc_f64_status == ACC_AS_F32
-                      || loader_ctx->acc_f64_status == ACC_AS_F32_POPPED);
-            loader_ctx->acc_f64_status = ACC_AS_F32_POPPED;
+            bh_assert(loader_ctx->float_acc_status == ACC_AS_F32
+                      || loader_ctx->float_acc_status == ACC_AS_F32_POPPED);
+            loader_ctx->float_acc_status = ACC_AS_F32_POPPED;
         }
         else if (type == VALUE_TYPE_F64) {
-            bh_assert(loader_ctx->acc_f64_status == ACC_AS_F64
-                      || loader_ctx->acc_f64_status == ACC_AS_F64_POPPED);
-            loader_ctx->acc_f64_status = ACC_AS_F64_POPPED;
+            bh_assert(loader_ctx->float_acc_status == ACC_AS_F64
+                      || loader_ctx->float_acc_status == ACC_AS_F64_POPPED);
+            loader_ctx->float_acc_status = ACC_AS_F64_POPPED;
         }
     }
     else {
-        bh_assert(loader_ctx->acc_i64_status == ACC_AS_I32
-                  || loader_ctx->acc_i64_status == ACC_AS_I64
-                  || loader_ctx->acc_i64_status == ACC_AS_I32_POPPED
-                  || loader_ctx->acc_i64_status == ACC_AS_I64_POPPED
-                  || loader_ctx->acc_f64_status == ACC_AS_F32
-                  || loader_ctx->acc_f64_status == ACC_AS_F64
-                  || loader_ctx->acc_f64_status == ACC_AS_F32_POPPED
-                  || loader_ctx->acc_f64_status == ACC_AS_F64_POPPED);
+        bh_assert(loader_ctx->int_acc_status == ACC_AS_I32
+                  || loader_ctx->int_acc_status == ACC_AS_I64
+                  || loader_ctx->int_acc_status == ACC_AS_I32_POPPED
+                  || loader_ctx->int_acc_status == ACC_AS_I64_POPPED
+                  || loader_ctx->float_acc_status == ACC_AS_F32
+                  || loader_ctx->float_acc_status == ACC_AS_F64
+                  || loader_ctx->float_acc_status == ACC_AS_F32_POPPED
+                  || loader_ctx->float_acc_status == ACC_AS_F64_POPPED);
         if (loader_ctx->p_code_compiled == NULL) {
             size = loader_ctx->code_compiled_size
                    - loader_ctx->code_compiled_size_label;
             loader_ctx->code_compiled_size =
                 loader_ctx->code_compiled_size_label;
-            if (((type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64)
-                 && loader_ctx->acc_i64_opnd_offset >= 0
-                 && loader_ctx->acc_i64_opnd_offset
-                        < loader_ctx->start_dynamic_offset)
-                || ((type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64)
-                    && loader_ctx->acc_f64_opnd_offset >= 0
-                    && loader_ctx->acc_f64_opnd_offset
-                           < loader_ctx->start_dynamic_offset))
+            if ((is_int_type(type)
+                 && acc_int_opnd_offset_is_local_offset(loader_ctx))
+                || (is_float_type(type)
+                    && acc_float_opnd_offset_is_local_offset(loader_ctx))) {
                 emit_store_acc(loader_ctx, type);
+            }
             emit_load_acc(loader_ctx, type, operand_offset);
             loader_ctx->code_compiled_size_label =
                 loader_ctx->code_compiled_size;
@@ -5260,15 +5291,12 @@ pop_op_from_acc(WASMLoaderContext *loader_ctx, uint8 type, int16 operand_offset)
             bh_memmove_s(buf, (uint32)sizeof(buf),
                          loader_ctx->p_code_compiled_label, size);
             loader_ctx->p_code_compiled = loader_ctx->p_code_compiled_label;
-            if (((type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64)
-                 && loader_ctx->acc_i64_opnd_offset >= 0
-                 && loader_ctx->acc_i64_opnd_offset
-                        < loader_ctx->start_dynamic_offset)
-                || ((type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64)
-                    && loader_ctx->acc_f64_opnd_offset >= 0
-                    && loader_ctx->acc_f64_opnd_offset
-                           < loader_ctx->start_dynamic_offset))
+            if ((is_int_type(type)
+                 && acc_int_opnd_offset_is_local_offset(loader_ctx))
+                || (is_float_type(type)
+                    && acc_float_opnd_offset_is_local_offset(loader_ctx))) {
                 emit_store_acc(loader_ctx, type);
+            }
             emit_load_acc(loader_ctx, type, operand_offset);
             loader_ctx->p_code_compiled_label = loader_ctx->p_code_compiled;
             bh_memcpy_s(loader_ctx->p_code_compiled, size, buf, size);
@@ -5278,37 +5306,32 @@ pop_op_from_acc(WASMLoaderContext *loader_ctx, uint8 type, int16 operand_offset)
 }
 
 static bool
-can_push_op_to_acc(WASMLoaderContext *loader_ctx, uint8 type)
+can_push_opnd_to_acc(WASMLoaderContext *loader_ctx, uint8 type)
 {
-    return (type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64
-            || type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64)
-               ? true
-               : false;
+    return (is_int_type(type) || is_float_type(type)) ? true : false;
 }
 
 static void
-push_op_to_acc(WASMLoaderContext *loader_ctx, uint8 type, int16 operand_offset)
+push_opnd_to_acc(WASMLoaderContext *loader_ctx, uint8 type,
+                 int16 operand_offset)
 {
     char buf[16];
     uint32 size;
 
-    if ((loader_ctx->acc_i64_is_dirty
-         && loader_ctx->acc_i64_opnd_offset != operand_offset
-         && (loader_ctx->acc_i64_status == ACC_AS_I32
-             || loader_ctx->acc_i64_status == ACC_AS_I64
-             || loader_ctx->acc_i64_status == ACC_AS_I32_POPPED
-             || loader_ctx->acc_i64_status == ACC_AS_I64_POPPED)
-         && loader_ctx->acc_i64_opnd_offset >= 0
-         && loader_ctx->acc_i64_opnd_offset < loader_ctx->start_dynamic_offset)
-        || (loader_ctx->acc_f64_is_dirty
-            && loader_ctx->acc_f64_opnd_offset != operand_offset
-            && (loader_ctx->acc_f64_status == ACC_AS_F32
-                || loader_ctx->acc_f64_status == ACC_AS_F64
-                || loader_ctx->acc_f64_status == ACC_AS_F32_POPPED
-                || loader_ctx->acc_f64_status == ACC_AS_F64_POPPED)
-            && loader_ctx->acc_f64_opnd_offset >= 0
-            && loader_ctx->acc_f64_opnd_offset
-                   < loader_ctx->start_dynamic_offset)) {
+    if ((loader_ctx->int_acc_is_dirty
+         && loader_ctx->int_acc_opnd_offset != operand_offset
+         && (loader_ctx->int_acc_status == ACC_AS_I32
+             || loader_ctx->int_acc_status == ACC_AS_I64
+             || loader_ctx->int_acc_status == ACC_AS_I32_POPPED
+             || loader_ctx->int_acc_status == ACC_AS_I64_POPPED)
+         && acc_int_opnd_offset_is_local_offset(loader_ctx))
+        || (loader_ctx->float_acc_is_dirty
+            && loader_ctx->float_acc_opnd_offset != operand_offset
+            && (loader_ctx->float_acc_status == ACC_AS_F32
+                || loader_ctx->float_acc_status == ACC_AS_F64
+                || loader_ctx->float_acc_status == ACC_AS_F32_POPPED
+                || loader_ctx->float_acc_status == ACC_AS_F64_POPPED)
+            && acc_float_opnd_offset_is_local_offset(loader_ctx))) {
         if (loader_ctx->p_code_compiled == NULL) {
             size = loader_ctx->code_compiled_size
                    - loader_ctx->code_compiled_size_label;
@@ -5333,65 +5356,62 @@ push_op_to_acc(WASMLoaderContext *loader_ctx, uint8 type, int16 operand_offset)
     }
 
     if (type == VALUE_TYPE_I32)
-        loader_ctx->acc_i64_status = ACC_AS_I32;
+        loader_ctx->int_acc_status = ACC_AS_I32;
     else if (type == VALUE_TYPE_I64)
-        loader_ctx->acc_i64_status = ACC_AS_I64;
+        loader_ctx->int_acc_status = ACC_AS_I64;
     else if (type == VALUE_TYPE_F32)
-        loader_ctx->acc_f64_status = ACC_AS_F32;
-    else
-        loader_ctx->acc_f64_status = ACC_AS_F64;
+        loader_ctx->float_acc_status = ACC_AS_F32;
+    else if (type == VALUE_TYPE_F64)
+        loader_ctx->float_acc_status = ACC_AS_F64;
+    else {
+        bh_assert(0);
+    }
 
-    if (type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64) {
-        loader_ctx->acc_i64_is_dirty = true;
-        loader_ctx->acc_i64_opnd_offset = operand_offset;
+    if (is_int_type(type)) {
+        loader_ctx->int_acc_is_dirty = true;
+        loader_ctx->int_acc_opnd_offset = operand_offset;
     }
     else {
-        loader_ctx->acc_f64_is_dirty = true;
-        loader_ctx->acc_f64_opnd_offset = operand_offset;
+        loader_ctx->float_acc_is_dirty = true;
+        loader_ctx->float_acc_opnd_offset = operand_offset;
     }
 }
 
 static void
 commit_acc(WASMLoaderContext *loader_ctx)
 {
-    if (loader_ctx->acc_i64_is_dirty
-        && (loader_ctx->acc_i64_opnd_offset >= 0
-            && loader_ctx->acc_i64_opnd_offset
-                   < loader_ctx->start_dynamic_offset)) {
-        if (loader_ctx->acc_i64_status == ACC_AS_I32
-            || loader_ctx->acc_i64_status == ACC_AS_I32_POPPED) {
-            emit_label(EXT_OP_STORE_ACC);
+    if (loader_ctx->int_acc_is_dirty
+        && acc_int_opnd_offset_is_local_offset(loader_ctx)) {
+        emit_label(EXT_OP_STORE_ACC);
+        if (loader_ctx->int_acc_status == ACC_AS_I32
+            || loader_ctx->int_acc_status == ACC_AS_I32_POPPED) {
             emit_operand(loader_ctx, VALUE_TYPE_I32);
         }
-        else if (loader_ctx->acc_i64_status == ACC_AS_I64
-                 || loader_ctx->acc_i64_status == ACC_AS_I64_POPPED) {
-            emit_label(EXT_OP_STORE_ACC);
+        else if (loader_ctx->int_acc_status == ACC_AS_I64
+                 || loader_ctx->int_acc_status == ACC_AS_I64_POPPED) {
             emit_operand(loader_ctx, VALUE_TYPE_I64);
         }
         else {
             bh_assert(0);
         }
-        emit_operand(loader_ctx, loader_ctx->acc_i64_opnd_offset);
+        emit_operand(loader_ctx, loader_ctx->int_acc_opnd_offset);
     }
 
-    if (loader_ctx->acc_f64_is_dirty
-        && (loader_ctx->acc_f64_opnd_offset >= 0
-            && loader_ctx->acc_f64_opnd_offset
-                   < loader_ctx->start_dynamic_offset)) {
-        if (loader_ctx->acc_f64_status == ACC_AS_F32
-            || loader_ctx->acc_f64_status == ACC_AS_F32_POPPED) {
-            emit_label(EXT_OP_STORE_ACC);
+    if (loader_ctx->float_acc_is_dirty
+        && acc_float_opnd_offset_is_local_offset(loader_ctx)) {
+        emit_label(EXT_OP_STORE_ACC);
+        if (loader_ctx->float_acc_status == ACC_AS_F32
+            || loader_ctx->float_acc_status == ACC_AS_F32_POPPED) {
             emit_operand(loader_ctx, VALUE_TYPE_F32);
         }
-        else if (loader_ctx->acc_f64_status == ACC_AS_F64
-                 || loader_ctx->acc_f64_status == ACC_AS_F64_POPPED) {
-            emit_label(EXT_OP_STORE_ACC);
+        else if (loader_ctx->float_acc_status == ACC_AS_F64
+                 || loader_ctx->float_acc_status == ACC_AS_F64_POPPED) {
             emit_operand(loader_ctx, VALUE_TYPE_F64);
         }
         else {
             bh_assert(0);
         }
-        emit_operand(loader_ctx, loader_ctx->acc_f64_opnd_offset);
+        emit_operand(loader_ctx, loader_ctx->float_acc_opnd_offset);
     }
 
     clear_acc_info(loader_ctx);
@@ -5408,10 +5428,10 @@ commit_acc_for_branch(WASMLoaderContext *loader_ctx, uint8 opcode)
 static void
 inc_operand_idx(WASMLoaderContext *loader_ctx, uint8 type)
 {
-    if (type == VALUE_TYPE_I32 || type == VALUE_TYPE_I64)
-        loader_ctx->cur_i_opnd_idx++;
-    else if (type == VALUE_TYPE_F32 || type == VALUE_TYPE_F64)
-        loader_ctx->cur_f_opnd_idx++;
+    if (is_int_type(type))
+        loader_ctx->cur_int_opnd_idx++;
+    else if (is_float_type(type))
+        loader_ctx->cur_float_opnd_idx++;
 }
 
 static bool
@@ -5448,8 +5468,8 @@ preserve_referenced_local(WASMLoaderContext *loader_ctx, uint8 opcode,
                         loader_ctx->preserved_local_offset += 2;
                     emit_label(EXT_OP_COPY_STACK_TOP_I64);
                 }
-                if (can_pop_op_from_acc(loader_ctx, local_type))
-                    pop_op_from_acc(loader_ctx, local_type, local_index);
+                if (can_pop_opnd_from_acc(loader_ctx, local_type))
+                    pop_opnd_from_acc(loader_ctx, local_type, local_index);
                 else
                     emit_operand(loader_ctx, local_index);
                 emit_operand(loader_ctx, preserved_offset);
@@ -5647,8 +5667,8 @@ wasm_loader_push_frame_offset(WASMLoaderContext *ctx, uint8 type,
     if (disable_emit)
         *(ctx->frame_offset)++ = operand_offset;
     else {
-        if (can_push_op_to_acc(ctx, type))
-            push_op_to_acc(ctx, type, ctx->dynamic_offset);
+        if (can_push_opnd_to_acc(ctx, type))
+            push_opnd_to_acc(ctx, type, ctx->dynamic_offset);
         else
             emit_operand(ctx, ctx->dynamic_offset);
         inc_operand_idx(ctx, type);
@@ -5720,10 +5740,24 @@ wasm_loader_pop_frame_offset(WASMLoaderContext *ctx, uint8 type,
             && (*(ctx->frame_offset) < ctx->max_dynamic_offset))
             ctx->dynamic_offset -= 2;
     }
-    if (can_pop_op_from_acc(ctx, type))
-        pop_op_from_acc(ctx, type, *(ctx->frame_offset));
-    else
+    if (can_pop_opnd_from_acc(ctx, type)) {
+        pop_opnd_from_acc(ctx, type, *(ctx->frame_offset));
+    }
+    else {
+        if (is_int_type(type)
+            && ctx->int_acc_status != ACC_UNUSED
+            && ctx->int_acc_opnd_offset == *(ctx->frame_offset)
+            && ctx->int_acc_is_dirty) {
+            //bh_assert(0);
+        }
+        if (is_float_type(type)
+            && ctx->float_acc_status != ACC_UNUSED
+            && ctx->float_acc_opnd_offset == *(ctx->frame_offset)
+            && ctx->float_acc_is_dirty) {
+            //bh_assert(0);
+        }
         emit_operand(ctx, *(ctx->frame_offset));
+    }
     inc_operand_idx(ctx, type);
     return true;
 }
@@ -6783,7 +6817,7 @@ re_scan:
         else
             loader_ctx->code_compiled_size_label =
                 loader_ctx->code_compiled_size;
-        loader_ctx->cur_i_opnd_idx = loader_ctx->cur_f_opnd_idx = 0;
+        loader_ctx->cur_int_opnd_idx = loader_ctx->cur_float_opnd_idx = 0;
 
         p_org = p;
         disable_emit = false;
