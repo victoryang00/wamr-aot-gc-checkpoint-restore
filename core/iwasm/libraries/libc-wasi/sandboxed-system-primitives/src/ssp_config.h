@@ -51,10 +51,16 @@
 #define CONFIG_HAS_FDATASYNC 0
 #endif
 
+/*
+ * For NuttX, CONFIG_HAS_ISATTY is provided by its platform header.
+ * (platform_internal.h)
+ */
+#ifndef __NuttX__
 #ifndef __CloudABI__
 #define CONFIG_HAS_ISATTY 1
 #else
 #define CONFIG_HAS_ISATTY 0
+#endif
 #endif
 
 #ifndef __APPLE__
@@ -103,6 +109,12 @@
 #define CONFIG_HAS_STD_ATOMIC 1
 #else
 #define CONFIG_HAS_STD_ATOMIC 0
+#endif
+
+#if !defined(__NuttX__)
+#define CONFIG_HAS_D_INO 1
+#else
+#define CONFIG_HAS_D_INO 0
 #endif
 
 #endif

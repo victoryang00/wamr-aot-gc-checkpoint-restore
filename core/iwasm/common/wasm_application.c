@@ -10,6 +10,9 @@
 #if WASM_ENABLE_AOT != 0
 #include "../aot/aot_runtime.h"
 #endif
+#if WASM_ENABLE_THREAD_MGR != 0
+#include "../libraries/thread-mgr/thread_manager.h"
+#endif
 
 static void
 set_error_buf(char *error_buf, uint32 error_buf_size, const char *string)
@@ -76,9 +79,8 @@ check_main_func_type(const WASMType *type)
     return true;
 }
 
-bool
-wasm_application_execute_main(WASMModuleInstanceCommon *module_inst, int32 argc,
-                              char *argv[])
+static bool
+execute_main(WASMModuleInstanceCommon *module_inst, int32 argc, char *argv[])
 {
     WASMFunctionInstanceCommon *func;
     WASMType *func_type = NULL;
@@ -201,6 +203,41 @@ wasm_application_execute_main(WASMModuleInstanceCommon *module_inst, int32 argc,
     if (argv_buf_offset)
         wasm_runtime_module_free(module_inst, argv_buf_offset);
     return ret;
+}
+
+bool
+wasm_application_execute_main(WASMModuleInstanceCommon *module_inst, int32 argc,
+                              char *argv[])
+{
+    bool ret;
+#if WASM_ENABLE_THREAD_MGR != 0
+    WASMCluster *cluster;
+#endif
+#if WASM_ENABLE_THREAD_MGR != 0 || WASM_ENABLE_MEMORY_PROFILING != 0
+    WASMExecEnv *exec_env;
+#endif
+
+    ret = execute_main(module_inst, argc, argv);
+
+#if WASM_ENABLE_THREAD_MGR != 0
+    exec_env = wasm_runtime_get_exec_env_singleton(module_inst);
+    if (exec_env && (cluster = wasm_exec_env_get_cluster(exec_env))) {
+        wasm_cluster_wait_for_all_except_self(cluster, exec_env);
+    }
+#endif
+
+#if WASM_ENABLE_MEMORY_PROFILING != 0
+    exec_env = wasm_runtime_get_exec_env_singleton(module_inst);
+    if (exec_env) {
+        wasm_runtime_dump_mem_consumption(exec_env);
+    }
+#endif
+
+#if WASM_ENABLE_PERF_PROFILING != 0
+    wasm_runtime_dump_perf_profiling(module_inst);
+#endif
+
+    return (ret && !wasm_runtime_get_exception(module_inst)) ? true : false;
 }
 
 #if WASM_ENABLE_MULTI_MODULE != 0
@@ -351,9 +388,9 @@ union ieee754_double {
     } ieee;
 };
 
-bool
-wasm_application_execute_func(WASMModuleInstanceCommon *module_inst,
-                              const char *name, int32 argc, char *argv[])
+static bool
+execute_func(WASMModuleInstanceCommon *module_inst, const char *name,
+             int32 argc, char *argv[])
 {
     WASMFunctionInstanceCommon *target_func;
     WASMModuleInstanceCommon *target_inst;
@@ -448,7 +485,7 @@ wasm_application_execute_func(WASMModuleInstanceCommon *module_inst,
                             u.ieee.ieee_little_endian.negative = 1;
                         else
                             u.ieee.ieee_big_endian.negative = 1;
-                        memcpy(&f32, &u.f, sizeof(float));
+                        bh_memcpy_s(&f32, sizeof(float), &u.f, sizeof(float));
                     }
                     if (endptr[0] == ':') {
                         uint32 sig;
@@ -459,10 +496,11 @@ wasm_application_execute_func(WASMModuleInstanceCommon *module_inst,
                             u.ieee.ieee_little_endian.mantissa = sig;
                         else
                             u.ieee.ieee_big_endian.mantissa = sig;
-                        memcpy(&f32, &u.f, sizeof(float));
+                        bh_memcpy_s(&f32, sizeof(float), &u.f, sizeof(float));
                     }
                 }
-                memcpy(&argv1[p++], &f32, sizeof(float));
+                bh_memcpy_s(&argv1[p], total_size - p, &f32, sizeof(float));
+                p++;
                 break;
             }
             case VALUE_TYPE_F64:
@@ -480,7 +518,8 @@ wasm_application_execute_func(WASMModuleInstanceCommon *module_inst,
                             ud.ieee.ieee_little_endian.negative = 1;
                         else
                             ud.ieee.ieee_big_endian.negative = 1;
-                        memcpy(&u.val, &ud.d, sizeof(double));
+                        bh_memcpy_s(&u.val, sizeof(double), &ud.d,
+                                    sizeof(double));
                     }
                     if (endptr[0] == ':') {
                         uint64 sig;
@@ -495,7 +534,8 @@ wasm_application_execute_func(WASMModuleInstanceCommon *module_inst,
                             ud.ieee.ieee_big_endian.mantissa0 = sig >> 32;
                             ud.ieee.ieee_big_endian.mantissa1 = (uint32)sig;
                         }
-                        memcpy(&u.val, &ud.d, sizeof(double));
+                        bh_memcpy_s(&u.val, sizeof(double), &ud.d,
+                                    sizeof(double));
                     }
                 }
                 argv1[p++] = u.parts[0];
@@ -688,4 +728,39 @@ fail:
     bh_assert(exception);
     os_printf("%s\n", exception);
     return false;
+}
+
+bool
+wasm_application_execute_func(WASMModuleInstanceCommon *module_inst,
+                              const char *name, int32 argc, char *argv[])
+{
+    bool ret;
+#if WASM_ENABLE_THREAD_MGR != 0
+    WASMCluster *cluster;
+#endif
+#if WASM_ENABLE_THREAD_MGR != 0 || WASM_ENABLE_MEMORY_PROFILING != 0
+    WASMExecEnv *exec_env;
+#endif
+
+    ret = execute_func(module_inst, name, argc, argv);
+
+#if WASM_ENABLE_THREAD_MGR != 0
+    exec_env = wasm_runtime_get_exec_env_singleton(module_inst);
+    if (exec_env && (cluster = wasm_exec_env_get_cluster(exec_env))) {
+        wasm_cluster_wait_for_all_except_self(cluster, exec_env);
+    }
+#endif
+
+#if WASM_ENABLE_MEMORY_PROFILING != 0
+    exec_env = wasm_runtime_get_exec_env_singleton(module_inst);
+    if (exec_env) {
+        wasm_runtime_dump_mem_consumption(exec_env);
+    }
+#endif
+
+#if WASM_ENABLE_PERF_PROFILING != 0
+    wasm_runtime_dump_perf_profiling(module_inst);
+#endif
+
+    return (ret && !wasm_runtime_get_exception(module_inst)) ? true : false;
 }

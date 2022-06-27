@@ -276,8 +276,13 @@ aot_compile_func(AOTCompContext *comp_ctx, uint32 func_index)
                     aot_set_last_error("allocate memory failed.");
                     goto fail;
                 }
+#if WASM_ENABLE_FAST_INTERP != 0
                 for (i = 0; i <= br_count; i++)
                     read_leb_uint32(frame_ip, frame_ip_end, br_depths[i]);
+#else
+                for (i = 0; i <= br_count; i++)
+                    br_depths[i] = *frame_ip++;
+#endif
 
                 if (!aot_compile_op_br_table(comp_ctx, func_ctx, br_depths,
                                              br_count, &frame_ip)) {
@@ -287,6 +292,35 @@ aot_compile_func(AOTCompContext *comp_ctx, uint32 func_index)
 
                 wasm_runtime_free(br_depths);
                 break;
+
+#if WASM_ENABLE_FAST_INTERP == 0
+            case EXT_OP_BR_TABLE_CACHE:
+            {
+                BrTableCache *node = bh_list_first_elem(
+                    comp_ctx->comp_data->wasm_module->br_table_cache_list);
+                BrTableCache *node_next;
+                uint8 *p_opcode = frame_ip - 1;
+
+                read_leb_uint32(frame_ip, frame_ip_end, br_count);
+
+                while (node) {
+                    node_next = bh_list_elem_next(node);
+                    if (node->br_table_op_addr == p_opcode) {
+                        br_depths = node->br_depths;
+                        if (!aot_compile_op_br_table(comp_ctx, func_ctx,
+                                                     br_depths, br_count,
+                                                     &frame_ip)) {
+                            return false;
+                        }
+                        break;
+                    }
+                    node = node_next;
+                }
+                bh_assert(node);
+
+                break;
+            }
+#endif
 
             case WASM_OP_RETURN:
                 if (!aot_compile_op_return(comp_ctx, func_ctx, &frame_ip))
@@ -2636,7 +2670,7 @@ apply_func_passes(AOTCompContext *comp_ctx)
     return true;
 }
 
-#if WASM_ENABLE_LLVM_LEGACY_PM != 0
+#if WASM_ENABLE_LLVM_LEGACY_PM != 0 || LLVM_VERSION_MAJOR < 12
 static bool
 apply_lto_passes(AOTCompContext *comp_ctx)
 {
@@ -2675,7 +2709,7 @@ apply_lto_passes(AOTCompContext *comp_ctx)
     LLVMPassManagerBuilderDispose(pass_mgr_builder);
     return true;
 }
-#endif
+#endif /* end of WASM_ENABLE_LLVM_LEGACY_PM != 0 || LLVM_VERSION_MAJOR < 12 */
 
 /* Check whether the target supports hardware atomic instructions */
 static bool
@@ -2782,7 +2816,7 @@ aot_compile_wasm(AOTCompContext *comp_ctx)
             }
         }
         else {
-#if WASM_ENABLE_LLVM_LEGACY_PM == 0
+#if WASM_ENABLE_LLVM_LEGACY_PM == 0 && LLVM_VERSION_MAJOR >= 12
             /* Run llvm new pass manager for AOT compiler if llvm
                legacy pass manager isn't used */
             bh_print_time("Begin to run llvm optimization passes");
@@ -2852,6 +2886,36 @@ aot_compile_wasm(AOTCompContext *comp_ctx)
     return true;
 }
 
+#if !(defined(_WIN32) || defined(_WIN32_))
+char *
+aot_generate_tempfile_name(const char *prefix, const char *extension,
+                           char *buffer, uint32 len)
+{
+    int fd, name_len;
+
+    name_len = snprintf(buffer, len, "%s-XXXXXX", prefix);
+
+    if ((fd = mkstemp(buffer)) <= 0) {
+        aot_set_last_error("make temp file failed.");
+        return NULL;
+    }
+
+    /* close and remove temp file */
+    close(fd);
+    unlink(buffer);
+
+    /* Check if buffer length is enough */
+    /* name_len + '.' + extension + '\0' */
+    if (name_len + 1 + strlen(extension) + 1 > len) {
+        aot_set_last_error("temp file name too long.");
+        return NULL;
+    }
+
+    snprintf(buffer + name_len, len - name_len, ".%s", extension);
+    return buffer;
+}
+#endif /* end of !(defined(_WIN32) || defined(_WIN32_)) */
+
 #if WASM_ENABLE_LAZY_JIT == 0
 bool
 aot_emit_llvm_file(AOTCompContext *comp_ctx, const char *file_name)
@@ -2880,6 +2944,83 @@ aot_emit_object_file(AOTCompContext *comp_ctx, char *file_name)
     LLVMTargetRef target = LLVMGetTargetMachineTarget(comp_ctx->target_machine);
 
     bh_print_time("Begin to emit object file");
+
+#if !(defined(_WIN32) || defined(_WIN32_))
+    if (comp_ctx->external_llc_compiler || comp_ctx->external_asm_compiler) {
+        char cmd[1024];
+        int ret;
+
+        if (comp_ctx->external_llc_compiler) {
+            char bc_file_name[64];
+
+            if (!aot_generate_tempfile_name("wamrc-bc", "bc", bc_file_name,
+                                            sizeof(bc_file_name))) {
+                return false;
+            }
+
+            if (LLVMWriteBitcodeToFile(comp_ctx->module, bc_file_name) != 0) {
+                aot_set_last_error("emit llvm bitcode file failed.");
+                return false;
+            }
+
+            snprintf(cmd, sizeof(cmd), "%s %s -o %s %s",
+                     comp_ctx->external_llc_compiler,
+                     comp_ctx->llc_compiler_flags ? comp_ctx->llc_compiler_flags
+                                                  : "-O3 -c",
+                     file_name, bc_file_name);
+            LOG_VERBOSE("invoking external LLC compiler:\n\t%s", cmd);
+
+            ret = system(cmd);
+            /* remove temp bitcode file */
+            unlink(bc_file_name);
+
+            if (ret != 0) {
+                aot_set_last_error("failed to compile LLVM bitcode to obj file "
+                                   "with external LLC compiler.");
+                return false;
+            }
+        }
+        else if (comp_ctx->external_asm_compiler) {
+            char asm_file_name[64];
+
+            if (!aot_generate_tempfile_name("wamrc-asm", "s", asm_file_name,
+                                            sizeof(asm_file_name))) {
+                return false;
+            }
+
+            if (LLVMTargetMachineEmitToFile(comp_ctx->target_machine,
+                                            comp_ctx->module, asm_file_name,
+                                            LLVMAssemblyFile, &err)
+                != 0) {
+                if (err) {
+                    LLVMDisposeMessage(err);
+                    err = NULL;
+                }
+                aot_set_last_error("emit elf to assembly file failed.");
+                return false;
+            }
+
+            snprintf(cmd, sizeof(cmd), "%s %s -o %s %s",
+                     comp_ctx->external_asm_compiler,
+                     comp_ctx->asm_compiler_flags ? comp_ctx->asm_compiler_flags
+                                                  : "-O3 -c",
+                     file_name, asm_file_name);
+            LOG_VERBOSE("invoking external ASM compiler:\n\t%s", cmd);
+
+            ret = system(cmd);
+            /* remove temp assembly file */
+            unlink(asm_file_name);
+
+            if (ret != 0) {
+                aot_set_last_error("failed to compile Assembly file to obj "
+                                   "file with external ASM compiler.");
+                return false;
+            }
+        }
+
+        return true;
+    }
+#endif /* end of !(defined(_WIN32) || defined(_WIN32_)) */
 
     if (!strncmp(LLVMGetTargetName(target), "arc", 3))
         /* Emit to assmelby file instead for arc target

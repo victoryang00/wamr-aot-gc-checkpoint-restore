@@ -319,6 +319,14 @@ typedef struct StringNode {
     char *str;
 } StringNode, *StringList;
 
+typedef struct BrTableCache {
+    struct BrTableCache *next;
+    /* Address of br_table opcode */
+    uint8 *br_table_op_addr;
+    uint32 br_count;
+    uint32 br_depths[1];
+} BrTableCache;
+
 #if WASM_ENABLE_DEBUG_INTERP != 0
 typedef struct WASMFastOPCodeNode {
     struct WASMFastOPCodeNode *next;
@@ -326,6 +334,20 @@ typedef struct WASMFastOPCodeNode {
     uint8 orig_op;
 } WASMFastOPCodeNode;
 #endif
+
+#if WASM_ENABLE_LOAD_CUSTOM_SECTION != 0
+typedef struct WASMCustomSection {
+    struct WASMCustomSection *next;
+    /* Start address of the section name */
+    char *name_addr;
+    /* Length of the section name decoded from leb */
+    uint32 name_len;
+    /* Start address of the content (name len and name skipped) */
+    uint8 *content_addr;
+    uint32 content_len;
+} WASMCustomSection;
+#endif
+
 struct WASMModule {
     /* Module type, for module loaded from WASM bytecode binary,
        this field is Wasm_Module_Bytecode;
@@ -403,6 +425,10 @@ struct WASMModule {
     bool possible_memory_grow;
 
     StringList const_str_list;
+#if WASM_ENABLE_FAST_INTERP == 0
+    bh_list br_table_cache_list_head;
+    bh_list *br_table_cache_list;
+#endif
 
 #if WASM_ENABLE_LIBC_WASI != 0
     WASIArguments wasi_args;
@@ -439,6 +465,10 @@ struct WASMModule {
 #if WASM_ENABLE_CUSTOM_NAME_SECTION != 0
     const uint8 *name_section_buf;
     const uint8 *name_section_buf_end;
+#endif
+
+#if WASM_ENABLE_LOAD_CUSTOM_SECTION != 0
+    WASMCustomSection *custom_section_list;
 #endif
 };
 

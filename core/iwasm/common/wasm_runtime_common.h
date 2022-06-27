@@ -303,6 +303,11 @@ typedef struct WASMModuleCommon {
        Wasm_Module_AoT, and this structure should be treated as
        AOTModule structure. */
     uint32 module_type;
+
+    /* The following uint8[1] member is a dummy just to indicate
+       some module_type dependent members follow.
+       Typically it should be accessed by casting to the corresponding
+       actual module_type dependent structure, not via this member. */
     uint8 module_data[1];
 } WASMModuleCommon;
 
@@ -314,6 +319,11 @@ typedef struct WASMModuleInstanceCommon {
        Wasm_Module_AoT, and this structure should be treated as
        AOTModuleInstance structure. */
     uint32 module_type;
+
+    /* The following uint8[1] member is a dummy just to indicate
+       some module_type dependent members follow.
+       Typically it should be accessed by casting to the corresponding
+       actual module_type dependent structure, not via this member. */
     uint8 module_inst_data[1];
 } WASMModuleInstanceCommon;
 
@@ -377,6 +387,11 @@ typedef struct WASMRegisteredModule {
 
 typedef struct WASMMemoryInstanceCommon {
     uint32 module_type;
+
+    /* The following uint8[1] member is a dummy just to indicate
+       some module_type dependent members follow.
+       Typically it should be accessed by casting to the corresponding
+       actual module_type dependent structure, not via this member. */
     uint8 memory_inst_data[1];
 } WASMMemoryInstanceCommon;
 
@@ -389,6 +404,7 @@ typedef struct wasm_frame_t {
     uint32 module_offset;
     uint32 func_index;
     uint32 func_offset;
+    const char *func_name_wp;
 } WASMCApiFrame;
 
 /* See wasm_export.h for description */
@@ -455,6 +471,28 @@ wasm_runtime_lookup_function(WASMModuleInstanceCommon *const module_inst,
 WASMType *
 wasm_runtime_get_function_type(const WASMFunctionInstanceCommon *function,
                                uint32 module_type);
+
+/* See wasm_export.h for description */
+WASM_RUNTIME_API_EXTERN uint32
+wasm_func_get_param_count(WASMFunctionInstanceCommon *const func_inst,
+                          WASMModuleInstanceCommon *const module_inst);
+
+/* See wasm_export.h for description */
+WASM_RUNTIME_API_EXTERN uint32
+wasm_func_get_result_count(WASMFunctionInstanceCommon *const func_inst,
+                           WASMModuleInstanceCommon *const module_inst);
+
+/* See wasm_export.h for description */
+WASM_RUNTIME_API_EXTERN void
+wasm_func_get_param_types(WASMFunctionInstanceCommon *const func_inst,
+                          WASMModuleInstanceCommon *const module_inst,
+                          wasm_valkind_t *param_types);
+
+/* See wasm_export.h for description */
+WASM_RUNTIME_API_EXTERN void
+wasm_func_get_result_types(WASMFunctionInstanceCommon *const func_inst,
+                           WASMModuleInstanceCommon *const module_inst,
+                           wasm_valkind_t *result_types);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN WASMExecEnv *
@@ -621,6 +659,11 @@ wasm_runtime_get_native_addr_range(WASMModuleInstanceCommon *module_inst,
                                    uint8 **p_native_start_addr,
                                    uint8 **p_native_end_addr);
 
+/* See wasm_export.h for description */
+WASM_RUNTIME_API_EXTERN const uint8 *
+wasm_runtime_get_custom_section(WASMModuleCommon *const module_comm,
+                                const char *name, uint32 *len);
+
 uint32
 wasm_runtime_get_temp_ret(WASMModuleInstanceCommon *module_inst);
 
@@ -761,6 +804,28 @@ void
 wasm_externref_cleanup(WASMModuleInstanceCommon *module_inst);
 #endif /* end of WASM_ENABLE_REF_TYPES */
 
+#if WASM_ENABLE_DUMP_CALL_STACK != 0
+/**
+ * @brief Internal implementation for dumping or printing callstack line
+ *
+ * @note if dump_or_print is true, then print to stdout directly;
+ * if dump_or_print is false, but *buf is NULL, then return the length of the
+ * line;
+ * if dump_or_print is false, and *buf is not NULL, then dump content to
+ * the memory pointed by *buf, and adjust *buf and *len according to actual
+ * bytes dumped, and return the actual dumped length
+ *
+ * @param line_buf current line to dump or print
+ * @param dump_or_print whether to print to stdout or dump to buf
+ * @param buf [INOUT] pointer to the buffer
+ * @param len [INOUT] pointer to remaining length
+ * @return bytes printed to stdout or dumped to buf
+ */
+uint32
+wasm_runtime_dump_line_buf_impl(const char *line_buf, bool dump_or_print,
+                                char **buf, uint32 *len);
+#endif /* end of WASM_ENABLE_DUMP_CALL_STACK != 0 */
+
 /* Get module of the current exec_env */
 WASMModuleCommon *
 wasm_exec_env_get_module(WASMExecEnv *exec_env);
@@ -841,6 +906,11 @@ wasm_runtime_invoke_c_api_native(WASMModuleInstanceCommon *module_inst,
 
 void
 wasm_runtime_show_app_heap_corrupted_prompt();
+
+#if WASM_ENABLE_LOAD_CUSTOM_SECTION != 0
+void
+wasm_runtime_destroy_custom_sections(WASMCustomSection *section_list);
+#endif
 
 #ifdef __cplusplus
 }

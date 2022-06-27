@@ -35,10 +35,15 @@ add_definitions(-DWASM_ENABLE_REF_TYPES=1)
 add_definitions(-DWASM_ENABLE_CUSTOM_NAME_SECTION=1)
 add_definitions(-DWASM_ENABLE_DUMP_CALL_STACK=1)
 add_definitions(-DWASM_ENABLE_PERF_PROFILING=1)
+add_definitions(-DWASM_ENABLE_LOAD_CUSTOM_SECTION=1)
 
 if (WAMR_BUILD_LLVM_LEGACY_PM EQUAL 1)
   add_definitions(-DWASM_ENABLE_LLVM_LEGACY_PM=1)
 endif()
+
+if (DEFINED WAMR_BUILD_AOT_FUNC_PREFIX)
+  add_definitions(-DAOT_FUNC_PREFIX="${WAMR_BUILD_AOT_FUNC_PREFIX}")
+endif ()
 
 # Set WAMR_BUILD_TARGET, currently values supported:
 # "X86_64", "AMD_64", "X86_32", "ARM_32", "MIPS_32", "XTENSA_32"
@@ -203,7 +208,7 @@ if (WAMR_BUILD_TARGET MATCHES "X86_.*" OR WAMR_BUILD_TARGET STREQUAL "AMD_64")
       set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined \
                                           -fno-sanitize=bounds,bounds-strict,alignment \
                                           -fno-sanitize-recover")
-      set(lib_ubsan ubsan)
+      set(lib_ubsan -fsanitize=undefined)
     endif()
   else ()
     # UNDEFINED BEHAVIOR, refer to https://en.cppreference.com/w/cpp/language/ub
@@ -211,7 +216,7 @@ if (WAMR_BUILD_TARGET MATCHES "X86_.*" OR WAMR_BUILD_TARGET STREQUAL "AMD_64")
       set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined \
                                           -fno-sanitize=bounds,alignment \
                                           -fno-sanitize-recover")
-      set(lib_ubsan ubsan)
+      set(lib_ubsan -fsanitize=undefined)
     endif()
   endif()
 endif ()

@@ -133,11 +133,12 @@ typedef struct RuntimeInitArgs {
     /* maximum thread number, only used when
         WASM_ENABLE_THREAD_MGR is defined */
     uint32_t max_thread_num;
-#if WASM_ENABLE_DEBUG_INTERP != 0
+
+    /* Debug settings, only used when
+       WASM_ENABLE_DEBUG_INTERP != 0 */
     char ip_addr[128];
     int platform_port;
     int instance_port;
-#endif
 } RuntimeInitArgs;
 
 #ifndef WASM_VALKIND_T_DEFINED
@@ -407,6 +408,54 @@ wasm_runtime_lookup_function(wasm_module_inst_t const module_inst,
                              const char *name, const char *signature);
 
 /**
+ * Get parameter count of the function instance
+ *
+ * @param func_inst the function instance
+ * @param module_inst the module instance the function instance belongs to
+ *
+ * @return the parameter count of the function instance
+ */
+WASM_RUNTIME_API_EXTERN uint32_t
+wasm_func_get_param_count(wasm_function_inst_t const func_inst,
+                          wasm_module_inst_t const module_inst);
+
+/**
+ * Get result count of the function instance
+ *
+ * @param func_inst the function instance
+ * @param module_inst the module instance the function instance belongs to
+ *
+ * @return the result count of the function instance
+ */
+WASM_RUNTIME_API_EXTERN uint32_t
+wasm_func_get_result_count(wasm_function_inst_t const func_inst,
+                           wasm_module_inst_t const module_inst);
+
+/**
+ * Get parameter types of the function instance
+ *
+ * @param func_inst the function instance
+ * @param module_inst the module instance the function instance belongs to
+ * @param param_types the parameter types returned
+ */
+WASM_RUNTIME_API_EXTERN void
+wasm_func_get_param_types(wasm_function_inst_t const func_inst,
+                          wasm_module_inst_t const module_inst,
+                          wasm_valkind_t *param_types);
+
+/**
+ * Get result types of the function instance
+ *
+ * @param func_inst the function instance
+ * @param module_inst the module instance the function instance belongs to
+ * @param result_types the result types returned
+ */
+WASM_RUNTIME_API_EXTERN void
+wasm_func_get_result_types(wasm_function_inst_t const func_inst,
+                           wasm_module_inst_t const module_inst,
+                           wasm_valkind_t *result_types);
+
+/**
  * Create execution environment for a WASM module instance.
  *
  * @param module_inst the module instance
@@ -448,7 +497,7 @@ WASM_RUNTIME_API_EXTERN uint32_t
 wasm_runtime_start_debug_instance(wasm_exec_env_t exec_env);
 
 /**
- * Initialize thread environment.
+ * Initialize the thread environment.
  * Note:
  *   If developer creates a child thread by himself to call the
  *   the wasm function in that thread, he should call this API
@@ -463,10 +512,16 @@ WASM_RUNTIME_API_EXTERN bool
 wasm_runtime_init_thread_env(void);
 
 /**
- * Destroy thread environment
+ * Destroy the thread environment
  */
 WASM_RUNTIME_API_EXTERN void
 wasm_runtime_destroy_thread_env(void);
+
+/**
+ * Whether the thread environment is initialized
+ */
+WASM_RUNTIME_API_EXTERN bool
+wasm_runtime_thread_env_inited(void);
 
 /**
  * Get WASM module instance from execution environment
@@ -637,6 +692,12 @@ wasm_runtime_get_custom_data(wasm_module_inst_t module_inst);
 /**
  * Allocate memory from the heap of WASM module instance
  *
+ * Note: wasm_runtime_module_malloc can call heap functions inside
+ * the module instance and thus cause a memory growth.
+ * This API needs to be used very carefully when you have a native
+ * pointers to the module instance memory obtained with
+ * wasm_runtime_addr_app_to_native or similar APIs.
+ *
  * @param module_inst the WASM module instance which contains heap
  * @param size the size bytes to allocate
  * @param p_native_addr return native address of the allocated memory
@@ -699,6 +760,10 @@ wasm_runtime_validate_app_addr(wasm_module_inst_t module_inst,
  * space or memory space. Moreover, it checks whether it is the offset of a
  * string that is end with '\0'.
  *
+ * Note: The validation result, especially the NUL termination check,
+ * is not reliable for a module instance with multiple threads because
+ * other threads can modify the heap behind us.
+ *
  * @param module_inst the WASM module instance
  * @param app_str_offset the app address of the string to validate, which is a
  *        relative address
@@ -728,6 +793,10 @@ wasm_runtime_validate_native_addr(wasm_module_inst_t module_inst,
 
 /**
  * Convert app address(relative address) to native address(absolute address)
+ *
+ * Note that native addresses to module instance memory can be invalidated
+ * on a memory growth. (Except shared memory, whose native addresses are
+ * stable.)
  *
  * @param module_inst the WASM module instance
  * @param app_offset the app adress
@@ -850,6 +919,7 @@ wasm_runtime_get_function_attachment(wasm_exec_env_t exec_env);
  */
 WASM_RUNTIME_API_EXTERN void
 wasm_runtime_set_user_data(wasm_exec_env_t exec_env, void *user_data);
+
 /**
  * Get the user data within execution environment.
  *
@@ -894,7 +964,7 @@ WASM_RUNTIME_API_EXTERN void
 wasm_runtime_set_max_thread_num(uint32_t num);
 
 /**
- * spawn a new exec_env, the spawned exec_env
+ * Spawn a new exec_env, the spawned exec_env
  *   can be used in other threads
  *
  * @param num the original exec_env
@@ -913,7 +983,7 @@ WASM_RUNTIME_API_EXTERN void
 wasm_runtime_destroy_spawned_exec_env(wasm_exec_env_t exec_env);
 
 /**
- * spawn a thread from the given exec_env
+ * Spawn a thread from the given exec_env
  *
  * @param exec_env the original exec_env
  * @param tid thread id to be returned to the caller
@@ -927,7 +997,7 @@ wasm_runtime_spawn_thread(wasm_exec_env_t exec_env, wasm_thread_t *tid,
                           wasm_thread_callback_t callback, void *arg);
 
 /**
- * waits a spawned thread to terminate
+ * Waits a spawned thread to terminate
  *
  * @param tid thread id
  * @param retval if not NULL, output the return value of the thread
@@ -977,12 +1047,54 @@ WASM_RUNTIME_API_EXTERN bool
 wasm_externref_retain(uint32_t externref_idx);
 
 /**
- * dump the call stack
+ * Dump the call stack to stdout
  *
  * @param exec_env the execution environment
  */
 WASM_RUNTIME_API_EXTERN void
 wasm_runtime_dump_call_stack(wasm_exec_env_t exec_env);
+
+/**
+ * Get the size required to store the call stack contents, including
+ * the space for terminating null byte ('\0')
+ *
+ * @param exec_env the execution environment
+ *
+ * @return size required to store the contents, 0 means error
+ */
+WASM_RUNTIME_API_EXTERN uint32_t
+wasm_runtime_get_call_stack_buf_size(wasm_exec_env_t exec_env);
+
+/**
+ * Dump the call stack to buffer.
+ *
+ * @note this function is not thread-safe, please only use this API
+ *       when the exec_env is not executing
+ *
+ * @param exec_env the execution environment
+ * @param buf buffer to store the dumped content
+ * @param len length of the buffer
+ *
+ * @return bytes dumped to the buffer, including the terminating null
+ *         byte ('\0'), 0 means error and data in buf may be invalid
+ */
+WASM_RUNTIME_API_EXTERN uint32_t
+wasm_runtime_dump_call_stack_to_buf(wasm_exec_env_t exec_env, char *buf,
+                                    uint32_t len);
+
+/**
+ * Get a custom section by name
+ *
+ * @param module_comm the module to find
+ * @param name name of the custom section
+ * @param len return the length of the content if found
+ *
+ * @return Custom section content (not including the name length
+ *         and name string) if found, NULL otherwise
+ */
+WASM_RUNTIME_API_EXTERN const uint8_t *
+wasm_runtime_get_custom_section(wasm_module_t const module_comm,
+                                const char *name, uint32_t *len);
 
 /* clang-format on */
 

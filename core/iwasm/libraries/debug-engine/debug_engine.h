@@ -44,6 +44,12 @@ typedef enum debug_state_t {
     APP_STOPPED
 } debug_state_t;
 
+typedef struct WASMDebugExecutionMemory {
+    uint32 start_offset;
+    uint32 size;
+    uint32 current_pos;
+} WASMDebugExecutionMemory;
+
 typedef struct WASMDebugInstance {
     struct WASMDebugInstance *next;
     WASMDebugControlThread *control_thread;
@@ -60,6 +66,11 @@ typedef struct WASMDebugInstance {
      * RUNNING when receiving STEP/CONTINUE commands, and set to
      * STOPPED when any thread stopped */
     volatile debug_state_t current_state;
+    /* Execution memory info. During debugging, the debug client may request to
+     * malloc a memory space to evaluate user expressions. We preserve a buffer
+     * during creating debug instance, and use a simple bump pointer allocator
+     * to serve lldb's memory request */
+    WASMDebugExecutionMemory exec_mem_info;
 } WASMDebugInstance;
 
 typedef enum WASMDebugEventKind {
@@ -116,6 +127,9 @@ wasm_debug_set_engine_active(bool active);
 
 bool
 wasm_debug_get_engine_active(void);
+
+WASMExecEnv *
+wasm_debug_instance_get_current_env(WASMDebugInstance *instance);
 
 uint64
 wasm_debug_instance_get_pid(WASMDebugInstance *instance);
