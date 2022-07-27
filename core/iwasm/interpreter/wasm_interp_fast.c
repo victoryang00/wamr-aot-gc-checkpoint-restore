@@ -1788,6 +1788,9 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                 HANDLE_OP_END();
             }
 
+            HANDLE_OP(EXT_OP_LOAD_I32_ACC)
+            HANDLE_OP(EXT_OP_STORE_I32_ACC) { HANDLE_OP_END(); }
+
             /* memory size and memory grow instructions */
             HANDLE_OP(WASM_OP_MEMORY_SIZE)
             {

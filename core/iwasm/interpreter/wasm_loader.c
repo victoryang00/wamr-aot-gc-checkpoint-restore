@@ -3217,13 +3217,16 @@ load_from_sections(WASMModule *module, WASMSection *sections,
     handle_table = wasm_interp_get_handle_table();
 #endif
 
+    uint32 total_code_size = 0;
     for (i = 0; i < module->function_count; i++) {
         WASMFunction *func = module->functions[i];
         if (!wasm_loader_prepare_bytecode(module, func, i, error_buf,
                                           error_buf_size)) {
             return false;
         }
+        total_code_size += func->code_compiled_size;
     }
+    printf("total_code_size: %u\n", total_code_size);
 
     if (!module->possible_memory_grow) {
         WASMMemoryImport *memory_import;
@@ -4403,10 +4406,27 @@ fail:
 
 #if WASM_ENABLE_FAST_INTERP != 0
 
+static char *
+get_opcode_name(uint8 opcode)
+{
+/* clang-format off */
+#define HANDLE_OPCODE(op) #op
+DEFINE_GOTO_TABLE(char *, op_names);
+#undef HANDLE_OPCODE
+    /* clang-format on */
+    char *name = op_names[opcode];
+    if (strstr(name, "WASM_OP_"))
+        name += 8;
+    return name;
+}
+
+#undef WASM_DEBUG_PREPROCESSOR
+#define WASM_DEBUG_PREPROCESSOR 1
+
 #if WASM_DEBUG_PREPROCESSOR != 0
 #define LOG_OP(...) os_printf(__VA_ARGS__)
 #else
-#define LOG_OP(...) (void)0
+#define LOG_OP(...) os_printf(__VA_ARGS__)
 #endif
 
 #define PATCH_ELSE 0
@@ -4441,6 +4461,11 @@ typedef struct BranchBlock {
      * and stack cell num. */
     bool is_stack_polymorphic;
 } BranchBlock;
+
+enum AccStatus {
+    ACC_UNUSED = 0,
+    ACC_USED,
+} AccStatus;
 
 typedef struct WASMLoaderContext {
     /* frame ref stack */
@@ -4482,6 +4507,15 @@ typedef struct WASMLoaderContext {
     uint8 *p_code_compiled;
     uint8 *p_code_compiled_end;
     uint32 code_compiled_size;
+
+    /* process accumulator */
+    uint8 *p_code_compiled_label;
+    uint32 code_compiled_size_label;
+    uint8 i32_opnd_idx;
+    uint8 i32_acc_status;
+    int16 i32_acc_opnd_offset;
+    bool i32_acc_is_dirty;
+    bool i32_acc_is_disabled;
 #endif
 } WASMLoaderContext;
 
@@ -4880,7 +4914,7 @@ fail:
 #define emit_label(opcode)                                      \
     do {                                                        \
         wasm_loader_emit_ptr(loader_ctx, handle_table[opcode]); \
-        LOG_OP("\nemit_op [%02x]\t", opcode);                   \
+        LOG_OP("\nemit_op [%s]\t", get_opcode_name(opcode));  \
     } while (0)
 #define skip_label()                                            \
     do {                                                        \
@@ -4898,7 +4932,7 @@ fail:
             goto fail;                                                         \
         }                                                                      \
         wasm_loader_emit_int16(loader_ctx, offset);                            \
-        LOG_OP("\nemit_op [%02x]\t", opcode);                                  \
+        LOG_OP("\nemit_op [%s]\t", get_opcode_name(opcode));                 \
     } while (0)
 #define skip_label()                                           \
     do {                                                       \
@@ -4910,7 +4944,7 @@ fail:
 #define emit_label(opcode)                          \
     do {                                            \
         wasm_loader_emit_uint8(loader_ctx, opcode); \
-        LOG_OP("\nemit_op [%02x]\t", opcode);       \
+        LOG_OP("\nemit_op [%s]\t", get_opcode_name(opcode));\
     } while (0)
 #define skip_label()                                           \
     do {                                                       \
@@ -5022,6 +5056,9 @@ fail:
         LOG_OP("%f\t", value);                      \
     } while (0)
 
+static void
+clear_i32_acc_info(WASMLoaderContext *loader_ctx);
+
 static bool
 wasm_loader_ctx_reinit(WASMLoaderContext *ctx)
 {
@@ -5048,6 +5085,8 @@ wasm_loader_ctx_reinit(WASMLoaderContext *ctx)
 
     /* init preserved local offsets */
     ctx->preserved_local_offset = ctx->max_dynamic_offset;
+
+    clear_i32_acc_info(ctx);
 
     /* const buf is reserved */
     return true;
@@ -5173,6 +5212,196 @@ wasm_loader_emit_backspace(WASMLoaderContext *ctx, uint32 size)
 }
 
 static bool
+i32_acc_opnd_offset_is_local_offset(WASMLoaderContext *loader_ctx)
+{
+    if (loader_ctx->i32_acc_opnd_offset >= 0
+        && loader_ctx->i32_acc_opnd_offset < loader_ctx->start_dynamic_offset)
+        return true;
+    return false;
+}
+
+static void
+clear_i32_acc_info(WASMLoaderContext *loader_ctx)
+{
+    loader_ctx->i32_opnd_idx = 0;
+    loader_ctx->i32_acc_status = ACC_UNUSED;
+    loader_ctx->i32_acc_opnd_offset = 0;
+    loader_ctx->i32_acc_is_dirty = 0;
+    loader_ctx->i32_acc_is_disabled = false;
+}
+
+static void
+emit_load_i32_acc(WASMLoaderContext *loader_ctx, int16 operand_offset)
+{
+    if (loader_ctx->i32_acc_is_disabled)
+        return;
+
+    emit_label(EXT_OP_LOAD_I32_ACC);
+    emit_operand(loader_ctx, operand_offset);
+
+    loader_ctx->i32_acc_status = ACC_USED;
+    loader_ctx->i32_acc_opnd_offset = operand_offset;
+    loader_ctx->i32_acc_is_dirty = false;
+}
+
+static void
+emit_store_i32_acc(WASMLoaderContext *loader_ctx)
+{
+    if (loader_ctx->i32_acc_is_disabled)
+        return;
+
+    if (loader_ctx->i32_acc_is_dirty) {
+        emit_label(EXT_OP_STORE_I32_ACC);
+        emit_operand(loader_ctx, loader_ctx->i32_acc_opnd_offset);
+        loader_ctx->i32_acc_is_dirty = false;
+    }
+}
+
+static bool
+can_push_i32_opnd_to_acc(WASMLoaderContext *loader_ctx, uint8 type)
+{
+    if (loader_ctx->i32_acc_is_disabled)
+        return false;
+
+    return type == VALUE_TYPE_I32 ? true : false;
+}
+
+static void
+push_i32_opnd_to_acc(WASMLoaderContext *loader_ctx, int16 opnd_offset)
+{
+    char buf[16];
+    uint32 size;
+
+    if (loader_ctx->i32_acc_is_disabled)
+        return;
+
+    if (loader_ctx->i32_acc_status == ACC_USED && loader_ctx->i32_acc_is_dirty
+        && loader_ctx->i32_acc_opnd_offset != opnd_offset) {
+        if (loader_ctx->p_code_compiled == NULL) {
+            size = loader_ctx->code_compiled_size
+                   - loader_ctx->code_compiled_size_label;
+            loader_ctx->code_compiled_size =
+                loader_ctx->code_compiled_size_label;
+            emit_store_i32_acc(loader_ctx);
+            loader_ctx->code_compiled_size_label =
+                loader_ctx->code_compiled_size;
+            loader_ctx->code_compiled_size += size;
+        }
+        else {
+            size = (uint32)(loader_ctx->p_code_compiled
+                            - loader_ctx->p_code_compiled_label);
+            bh_memmove_s(buf, (uint32)sizeof(buf),
+                         loader_ctx->p_code_compiled_label, size);
+            loader_ctx->p_code_compiled = loader_ctx->p_code_compiled_label;
+            emit_store_i32_acc(loader_ctx);
+            loader_ctx->p_code_compiled_label = loader_ctx->p_code_compiled;
+            bh_memcpy_s(loader_ctx->p_code_compiled, size, buf, size);
+            loader_ctx->p_code_compiled += size;
+        }
+    }
+
+    loader_ctx->i32_acc_status = ACC_USED;
+    loader_ctx->i32_acc_is_dirty = true;
+    loader_ctx->i32_acc_opnd_offset = opnd_offset;
+}
+
+static bool
+can_pop_i32_opnd_from_acc(WASMLoaderContext *loader_ctx, uint8 type)
+{
+    if (loader_ctx->i32_acc_is_disabled)
+        return false;
+
+    if (type == VALUE_TYPE_I32 && loader_ctx->i32_opnd_idx == 0)
+        return true;
+    return false;
+}
+
+static void
+pop_i32_opnd_from_acc(WASMLoaderContext *loader_ctx, int16 opnd_offset)
+{
+    uint8 buf[16];
+    uint32 size;
+
+    if (loader_ctx->i32_acc_is_disabled)
+        return;
+
+    if (loader_ctx->i32_acc_status == ACC_UNUSED) {
+        if (loader_ctx->p_code_compiled == NULL) {
+            size = loader_ctx->code_compiled_size
+                   - loader_ctx->code_compiled_size_label;
+            loader_ctx->code_compiled_size =
+                loader_ctx->code_compiled_size_label;
+            emit_load_i32_acc(loader_ctx, opnd_offset);
+            loader_ctx->code_compiled_size_label =
+                loader_ctx->code_compiled_size;
+            loader_ctx->code_compiled_size += size;
+        }
+        else {
+            size = (uint32)(loader_ctx->p_code_compiled
+                            - loader_ctx->p_code_compiled_label);
+            bh_memmove_s(buf, (uint32)sizeof(buf),
+                         loader_ctx->p_code_compiled_label, size);
+            loader_ctx->p_code_compiled = loader_ctx->p_code_compiled_label;
+            emit_load_i32_acc(loader_ctx, opnd_offset);
+            loader_ctx->p_code_compiled_label = loader_ctx->p_code_compiled;
+            bh_memcpy_s(loader_ctx->p_code_compiled, size, buf, size);
+            loader_ctx->p_code_compiled += size;
+        }
+    }
+    else if (loader_ctx->i32_acc_opnd_offset != opnd_offset) {
+        if (loader_ctx->p_code_compiled == NULL) {
+            size = loader_ctx->code_compiled_size
+                   - loader_ctx->code_compiled_size_label;
+            loader_ctx->code_compiled_size =
+                loader_ctx->code_compiled_size_label;
+            if (i32_acc_opnd_offset_is_local_offset(loader_ctx)) {
+                emit_store_i32_acc(loader_ctx);
+            }
+            emit_load_i32_acc(loader_ctx, opnd_offset);
+            loader_ctx->code_compiled_size_label =
+                loader_ctx->code_compiled_size;
+            loader_ctx->code_compiled_size += size;
+        }
+        else {
+            size = (uint32)(loader_ctx->p_code_compiled
+                            - loader_ctx->p_code_compiled_label);
+            bh_memmove_s(buf, (uint32)sizeof(buf),
+                         loader_ctx->p_code_compiled_label, size);
+            loader_ctx->p_code_compiled = loader_ctx->p_code_compiled_label;
+            if (i32_acc_opnd_offset_is_local_offset(loader_ctx)) {
+                emit_store_i32_acc(loader_ctx);
+            }
+            emit_load_i32_acc(loader_ctx, opnd_offset);
+            loader_ctx->p_code_compiled_label = loader_ctx->p_code_compiled;
+            bh_memcpy_s(loader_ctx->p_code_compiled, size, buf, size);
+            loader_ctx->p_code_compiled += size;
+        }
+    }
+}
+
+static void
+commit_i32_acc_for_branch(WASMLoaderContext *loader_ctx, uint8 opcode)
+{
+    if (loader_ctx->i32_acc_status == ACC_USED
+        && loader_ctx->i32_acc_is_dirty
+        && i32_acc_opnd_offset_is_local_offset(loader_ctx)) {
+        skip_label();
+        emit_label(EXT_OP_STORE_I32_ACC);
+        emit_operand(loader_ctx, loader_ctx->i32_acc_opnd_offset);
+        emit_label(opcode);
+    }
+
+    clear_i32_acc_info(loader_ctx);
+}
+
+static void
+inc_i32_opnd_idx(WASMLoaderContext *loader_ctx, uint8 type)
+{
+    if (type == VALUE_TYPE_I32)
+        loader_ctx->i32_opnd_idx++;
+}
+
+static bool
 preserve_referenced_local(WASMLoaderContext *loader_ctx, uint8 opcode,
                           uint32 local_index, uint32 local_type,
                           bool *preserved, char *error_buf,
@@ -5206,9 +5435,15 @@ preserve_referenced_local(WASMLoaderContext *loader_ctx, uint8 opcode,
                         loader_ctx->preserved_local_offset += 2;
                     emit_label(EXT_OP_COPY_STACK_TOP_I64);
                 }
-                emit_operand(loader_ctx, local_index);
+                if (can_pop_i32_opnd_from_acc(loader_ctx, local_type)) {
+                    pop_i32_opnd_from_acc(loader_ctx, local_index);
+                }
+                else
+                    emit_operand(loader_ctx, local_index);
                 emit_operand(loader_ctx, preserved_offset);
                 emit_label(opcode);
+
+                inc_i32_opnd_idx(loader_ctx, local_type);
             }
             loader_ctx->frame_offset_bottom[i] = preserved_offset;
         }
@@ -5401,7 +5636,12 @@ wasm_loader_push_frame_offset(WASMLoaderContext *ctx, uint8 type,
     if (disable_emit)
         *(ctx->frame_offset)++ = operand_offset;
     else {
-        emit_operand(ctx, ctx->dynamic_offset);
+        if (can_push_i32_opnd_to_acc(ctx, type))
+            push_i32_opnd_to_acc(ctx, ctx->dynamic_offset);
+        else
+            emit_operand(ctx, ctx->dynamic_offset);
+        inc_i32_opnd_idx(ctx, type);
+
         *(ctx->frame_offset)++ = ctx->dynamic_offset;
         ctx->dynamic_offset++;
         if (ctx->dynamic_offset > ctx->max_dynamic_offset) {
@@ -5482,7 +5722,14 @@ wasm_loader_pop_frame_offset(WASMLoaderContext *ctx, uint8 type,
             && (*(ctx->frame_offset) < ctx->max_dynamic_offset))
             ctx->dynamic_offset -= 2;
     }
-    emit_operand(ctx, *(ctx->frame_offset));
+    if (can_pop_i32_opnd_from_acc(ctx, type)) {
+        pop_i32_opnd_from_acc(ctx, *(ctx->frame_offset));
+    }
+    else {
+        emit_operand(ctx, *(ctx->frame_offset));
+    }
+
+    inc_i32_opnd_idx(ctx, type);
     return true;
 }
 
@@ -6573,6 +6820,7 @@ wasm_loader_prepare_bytecode(WASMModule *module, WASMFunction *func,
 
 re_scan:
     if (loader_ctx->code_compiled_size > 0) {
+        LOG_OP("\n\n####re_scan:\n");
         if (!wasm_loader_ctx_reinit(loader_ctx)) {
             set_error_buf(error_buf, error_buf_size, "allocate memory failed");
             goto fail;
@@ -6588,6 +6836,13 @@ re_scan:
     while (p < p_end) {
         opcode = *p++;
 #if WASM_ENABLE_FAST_INTERP != 0
+        if (loader_ctx->p_code_compiled)
+            loader_ctx->p_code_compiled_label = loader_ctx->p_code_compiled;
+        else
+            loader_ctx->code_compiled_size_label =
+                loader_ctx->code_compiled_size;
+        loader_ctx->i32_opnd_idx = 0;
+
         p_org = p;
         disable_emit = false;
         emit_label(opcode);
@@ -6606,20 +6861,18 @@ re_scan:
                 break;
 
             case WASM_OP_IF:
-#if WASM_ENABLE_FAST_INTERP != 0
-                PRESERVE_LOCAL_FOR_BLOCK();
-#endif
-                POP_I32();
-                goto handle_op_block_and_loop;
             case WASM_OP_BLOCK:
             case WASM_OP_LOOP:
-#if WASM_ENABLE_FAST_INTERP != 0
-                PRESERVE_LOCAL_FOR_BLOCK();
-#endif
-            handle_op_block_and_loop:
             {
                 uint8 value_type;
                 BlockType block_type;
+
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
+                PRESERVE_LOCAL_FOR_BLOCK();
+#endif
+                if (opcode == WASM_OP_IF)
+                    POP_I32();
 
                 p_org = p - 1;
                 value_type = read_uint8(p);
@@ -6751,6 +7004,10 @@ re_scan:
             {
                 BlockType block_type = (loader_ctx->frame_csp - 1)->block_type;
 
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
+#endif
+
                 if (loader_ctx->csp_num < 2
                     || (loader_ctx->frame_csp - 1)->label_type
                            != LABEL_TYPE_IF) {
@@ -6802,6 +7059,10 @@ re_scan:
             case WASM_OP_END:
             {
                 BranchBlock *cur_block = loader_ctx->frame_csp - 1;
+
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
+#endif
 
                 /* check whether block stack matches its result type */
                 if (!check_block_stack(loader_ctx, cur_block, error_buf,
@@ -6877,6 +7138,10 @@ re_scan:
 
             case WASM_OP_BR:
             {
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
+#endif
+
                 if (!(frame_csp_tmp = check_branch_block(
                           loader_ctx, &p, p_end, error_buf, error_buf_size)))
                     goto fail;
@@ -6889,6 +7154,10 @@ re_scan:
             case WASM_OP_BR_IF:
             {
                 POP_I32();
+
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
+#endif
 
                 if (!(frame_csp_tmp = check_branch_block(
                           loader_ctx, &p, p_end, error_buf, error_buf_size)))
@@ -6907,6 +7176,10 @@ re_scan:
                 BrTableCache *br_table_cache = NULL;
 
                 p_org = p - 1;
+#endif
+
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
 #endif
 
                 read_leb_uint32(p, p_end, count);
@@ -7011,6 +7284,11 @@ re_scan:
             {
                 int32 idx;
                 uint8 ret_type;
+
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
+#endif
+
                 for (idx = (int32)func->func_type->result_count - 1; idx >= 0;
                      idx--) {
                     ret_type = *(func->func_type->types
@@ -7035,6 +7313,11 @@ re_scan:
             {
                 WASMType *func_type;
                 int32 idx;
+
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
+                loader_ctx->i32_acc_is_disabled = true;
+#endif
 
                 read_leb_uint32(p, p_end, func_idx);
 #if WASM_ENABLE_FAST_INTERP != 0
@@ -7108,6 +7391,9 @@ re_scan:
                 }
 #endif
                 func->has_op_func_call = true;
+#if WASM_ENABLE_FAST_INTERP != 0
+                loader_ctx->i32_acc_is_disabled = false;
+#endif
                 break;
             }
 
@@ -7122,6 +7408,11 @@ re_scan:
             {
                 int32 idx;
                 WASMType *func_type;
+
+#if WASM_ENABLE_FAST_INTERP != 0
+                commit_i32_acc_for_branch(loader_ctx, opcode);
+                loader_ctx->i32_acc_is_disabled = true;
+#endif
 
                 read_leb_uint32(p, p_end, type_idx);
 #if WASM_ENABLE_REF_TYPES != 0
@@ -7202,6 +7493,9 @@ re_scan:
                 }
 #endif
                 func->has_op_func_call = true;
+#if WASM_ENABLE_FAST_INTERP != 0
+                loader_ctx->i32_acc_is_disabled = false;
+#endif
                 break;
             }
 
