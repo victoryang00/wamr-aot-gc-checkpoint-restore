@@ -6,9 +6,11 @@ cmake_minimum_required (VERSION 3.4.1)
 set (CMAKE_VERBOSE_MAKEFILE on)
 set (CMAKE_BUILD_TYPE       Release)
 
-set (CMAKE_TOOLCHAIN_FILE "$ENV{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake")
-set (ANDROID_NDK $ENV{ANDROID_NDK_HOME})
-set (ANDROID_SDK $ENV{ANDROID_SDK_HOME})
+# https://github.com/actions/virtual-environments/blob/main/images/linux/Ubuntu2004-Readme.md#environment-variables-3
+set (CMAKE_TOOLCHAIN_FILE "$ENV{ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake")
+set (ANDROID_SDK $ENV{ANDROID_HOME})
+set (ANDROID_NDK $ENV{ANDROID_NDK_LATEST_HOME})
+
 set (ANDROID_ABI "x86")
 set (ANDROID_LD lld)
 if (NOT DEFINED ANDROID_PLATFORM)
@@ -102,7 +104,7 @@ else()
 target_link_libraries (iwasm ${LLVM_AVAILABLE_LIBS} ${UV_A_LIBS} -lm -ldl -landroid -llog)
 endif()
 
-set (distribution_DIR ${CMAKE_CURRENT_SOURCE_DIR}/build/distribution)
+set (distribution_DIR ${CMAKE_BINARY_DIR}/distribution)
 set_target_properties (iwasm PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${distribution_DIR}/wasm/lib")
 
 add_custom_command (TARGET iwasm POST_BUILD

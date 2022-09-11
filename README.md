@@ -7,7 +7,7 @@ WebAssembly Micro Runtime
 [BA]: https://bytecodealliance.org/
 
 WebAssembly Micro Runtime (WAMR) is a lightweight standalone WebAssembly (WASM) runtime with small footprint, high performance and highly configurable features for applications cross from embedded, IoT, edge to Trusted Execution Environment (TEE), smart contract, cloud native and so on. It includes a few parts as below:
-- The [**"iwasm" VM core**](./README.md#iwasm-vm-core) to run WASM applications, supporting interpreter mode, AOT mode (Ahead-of-Time compilation) and JIT mode (Just-in-Time compilation)
+- The [**"iwasm" VM core**](./README.md#iwasm-vm-core) to run WASM applications, supporting interpreter mode, AOT mode (Ahead-of-Time compilation) and JIT modes (Just-in-Time compilation, LLVM JIT and Fast JIT are supported)
 
 - The [**"wamrc" AOT compiler**](./README.md#build-wamrc-aot-compiler) to compile WASM file into AOT file for best performance and smaller runtime footprint, which is run by "iwasm" VM Core
 
@@ -45,6 +45,7 @@ iwasm VM core
 - [WAMR-IDE (Experimental)](./test-tools/wamr-ide) to develop WebAssembly applications with build, run and debug support, ref to [document](./test-tools/wamr-ide)
 - [XIP (Execution In Place) support](./doc/xip.md), ref to [document](./doc/xip.md)
 - [Berkeley/Posix Socket support](./doc/socket_api.md), ref to [document](./doc/socket_api.md) and [sample](./samples/socket-api)
+- Language bindings: [Go](./language-bindings/go/README.md), [Python](./language-bindings/python/README.md)
 
 ### WASM post-MVP features
 - [wasm-c-api](https://github.com/WebAssembly/wasm-c-api), ref to [document](doc/wasm_c_api.md) and [sample](samples/wasm-c-api)
@@ -158,6 +159,7 @@ The WAMR [samples](./samples) integrate the iwasm VM core, application manager a
 - **[wasm-c-api](./samples/wasm-c-api/README.md)**: Demonstrating how to run some samples from [wasm-c-api proposal](https://github.com/WebAssembly/wasm-c-api) and showing the supported API's.
 - **[socket-api](./samples/socket-api/README.md)**: Demonstrating how to run wasm tcp server and tcp client applications, and how they communicate with each other.
 - **[workload](./samples/workload/README.md)**: Demonstrating how to build and run some complex workloads, e.g. tensorflow-lite, XNNPACK, wasm-av1, meshoptimizer and bwa.
+- **[sgx-ra](./samples/sgx-ra/README.md)**: Demonstrating how to execute Remote Attestation on SGX with [librats](https://github.com/inclavare-containers/librats), which enables mutual attestation with other runtimes or other entities that support librats to ensure that each is running within the TEE.
 
 
 Project Technical Steering Committee

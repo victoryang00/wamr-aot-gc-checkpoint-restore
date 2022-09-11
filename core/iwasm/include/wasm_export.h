@@ -121,6 +121,13 @@ typedef union MemAllocOption {
 } MemAllocOption;
 #endif
 
+/* Memory pool info  */
+typedef struct mem_alloc_info_t {
+    uint32_t total_size;
+    uint32_t total_free_size;
+    uint32_t highmark_size;
+} mem_alloc_info_t;
+
 /* WASM runtime initialize arguments */
 typedef struct RuntimeInitArgs {
     mem_alloc_type_t mem_alloc_type;
@@ -137,8 +144,11 @@ typedef struct RuntimeInitArgs {
     /* Debug settings, only used when
        WASM_ENABLE_DEBUG_INTERP != 0 */
     char ip_addr[128];
-    int platform_port;
+    int unused; /* was platform_port */
     int instance_port;
+
+    /* Fast JIT code cache size */
+    uint32_t fast_jit_code_cache_size;
 } RuntimeInitArgs;
 
 #ifndef WASM_VALKIND_T_DEFINED
@@ -226,6 +236,12 @@ wasm_runtime_realloc(void *ptr, unsigned int size);
 WASM_RUNTIME_API_EXTERN void
 wasm_runtime_free(void *ptr);
 
+/*
+ * Get memory info, only pool mode is supported now.
+ */
+WASM_RUNTIME_API_EXTERN bool
+wasm_runtime_get_mem_alloc_info(mem_alloc_info_t *mem_alloc_info);
+
 /**
  * Get the package type of a buffer.
  *
@@ -249,20 +265,18 @@ WASM_RUNTIME_API_EXTERN bool
 wasm_runtime_is_xip_file(const uint8_t *buf, uint32_t size);
 
 /**
- * It is a callback for WAMR providing by embedding to load a module file
- * into a buffer
+ * Callback to load a module file into a buffer in multi-module feature
  */
 typedef bool (*module_reader)(const char *module_name,
                               uint8_t **p_buffer, uint32_t *p_size);
 
 /**
- * It is a callback for WAMR providing by embedding to release the buffer which
- * is used by loading a module file
+ * Callback to release the buffer loaded by module_reader callback
  */
 typedef void (*module_destroyer)(uint8_t *buffer, uint32_t size);
 
 /**
- * To setup callbacks for reading and releasing a buffer about a module file
+ * Setup callbacks for reading and releasing a buffer about a module file
  *
  * @param reader a callback to read a module file into a buffer
  * @param destroyer a callback to release above buffer
@@ -272,7 +286,7 @@ wasm_runtime_set_module_reader(const module_reader reader,
                                const module_destroyer destroyer);
 /**
  * Give the "module" a name "module_name".
- * can not assign a new name to a module if it already has a name
+ * Can not assign a new name to a module if it already has a name
  *
  * @param module_name indicate a name
  * @param module the target module
@@ -286,8 +300,8 @@ wasm_runtime_register_module(const char *module_name, wasm_module_t module,
                              char *error_buf, uint32_t error_buf_size);
 
 /**
- * To check if there is already a loaded module named module_name in the
- * runtime. you will not want to load repeately
+ * Check if there is already a loaded module named module_name in the
+ * runtime. Repeately loading a module with the same name is not allowed.
  *
  * @param module_name indicate a name
  *
@@ -483,6 +497,23 @@ WASM_RUNTIME_API_EXTERN void
 wasm_runtime_destroy_exec_env(wasm_exec_env_t exec_env);
 
 /**
+ * Get the singleton execution environment for the instance.
+ *
+ * Note: The singleton execution environment is the execution
+ * environment used internally by the runtime for the API functions
+ * like wasm_application_execute_main, which don't take explicit
+ * execution environment. It's associated to the corresponding
+ * module instance and managed by the runtime. The API user should
+ * not destroy it with wasm_runtime_destroy_exec_env.
+ *
+ * @param module_inst the module instance
+ *
+ * @return exec_env the execution environment to destroy
+ */
+WASM_RUNTIME_API_EXTERN wasm_exec_env_t
+wasm_runtime_get_exec_env_singleton(wasm_module_inst_t module_inst);
+
+/**
  * Start debug instance based on given execution environment.
  * Note:
  *   The debug instance will be destroyed during destroying the
@@ -496,8 +527,17 @@ wasm_runtime_destroy_exec_env(wasm_exec_env_t exec_env);
  *   they are sharing the same cluster with the main exec_env.
  *
  * @param exec_env the execution environment to start debug instance
+ * @param port     the port for the debug server to listen on.
+ *                 0 means automatic assignment.
+ *                 -1 means to use the global setting in RuntimeInitArgs.
  *
  * @return debug port if success, 0 otherwise.
+ */
+WASM_RUNTIME_API_EXTERN uint32_t
+wasm_runtime_start_debug_instance_with_port(wasm_exec_env_t exec_env, int32_t port);
+
+/**
+ * Same as wasm_runtime_start_debug_instance_with_port(env, -1).
  */
 WASM_RUNTIME_API_EXTERN uint32_t
 wasm_runtime_start_debug_instance(wasm_exec_env_t exec_env);
@@ -1018,7 +1058,7 @@ wasm_runtime_spawn_thread(wasm_exec_env_t exec_env, wasm_thread_t *tid,
                           wasm_thread_callback_t callback, void *arg);
 
 /**
- * Waits a spawned thread to terminate
+ * Wait a spawned thread to terminate
  *
  * @param tid thread id
  * @param retval if not NULL, output the return value of the thread
@@ -1117,6 +1157,12 @@ WASM_RUNTIME_API_EXTERN const uint8_t *
 wasm_runtime_get_custom_section(wasm_module_t const module_comm,
                                 const char *name, uint32_t *len);
 
+
+/**
+ * Get WAMR semantic version
+ */
+WASM_RUNTIME_API_EXTERN void
+wasm_runtime_get_version(uint32_t *major, uint32_t *minor, uint32_t *patch);
 /* clang-format on */
 
 #ifdef __cplusplus
