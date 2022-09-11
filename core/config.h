@@ -94,6 +94,18 @@
 #define WASM_ENABLE_LAZY_JIT 0
 #endif
 
+#ifndef WASM_ENABLE_FAST_JIT
+#define WASM_ENABLE_FAST_JIT 0
+#endif
+
+#ifndef WASM_ENABLE_FAST_JIT_DUMP
+#define WASM_ENABLE_FAST_JIT_DUMP 0
+#endif
+
+#ifndef FAST_JIT_DEFAULT_CODE_CACHE_SIZE
+#define FAST_JIT_DEFAULT_CODE_CACHE_SIZE 10 * 1024 * 1024
+#endif
+
 #ifndef WASM_ENABLE_WAMR_COMPILER
 #define WASM_ENABLE_WAMR_COMPILER 0
 #endif
@@ -123,8 +135,16 @@
 #define WASM_ENABLE_LIBC_EMCC 0
 #endif
 
+#ifndef WASM_ENABLE_LIB_RATS
+#define WASM_ENABLE_LIB_RATS 0
+#endif
+
 #ifndef WASM_ENABLE_LIB_PTHREAD
 #define WASM_ENABLE_LIB_PTHREAD 0
+#endif
+
+#ifndef WASM_ENABLE_LIB_PTHREAD_SEMAPHORE
+#define WASM_ENABLE_LIB_PTHREAD_SEMAPHORE 0
 #endif
 
 #ifndef WASM_ENABLE_BASE_LIB
@@ -256,6 +276,30 @@
 #define BH_ENABLE_GC_VERIFY 0
 #endif
 
+/* Enable global heap pool if heap verification is enabled */
+#if BH_ENABLE_GC_VERIFY != 0
+#define WASM_ENABLE_GLOBAL_HEAP_POOL 1
+#endif
+
+/* Global heap pool */
+#ifndef WASM_ENABLE_GLOBAL_HEAP_POOL
+#define WASM_ENABLE_GLOBAL_HEAP_POOL 0
+#endif
+
+#ifndef WASM_ENABLE_SPEC_TEST
+#define WASM_ENABLE_SPEC_TEST 0
+#endif
+
+/* Global heap pool size in bytes */
+#ifndef WASM_GLOBAL_HEAP_SIZE
+#if WASM_ENABLE_SPEC_TEST != 0
+/* Spec test requires more heap pool size */
+#define WASM_GLOBAL_HEAP_SIZE (300 * 1024 * 1024)
+#else
+#define WASM_GLOBAL_HEAP_SIZE (10 * 1024 * 1024)
+#endif
+#endif
+
 /* Max app number of all modules */
 #define MAX_APP_INSTALLATIONS 3
 
@@ -327,12 +371,12 @@
 
 /* Reserved bytes to the native thread stack boundary, throw native
    stack overflow exception if the guard boudary is reached */
-#ifndef RESERVED_BYTES_TO_NATIVE_STACK_BOUNDARY
+#ifndef WASM_STACK_GUARD_SIZE
 #if WASM_ENABLE_UVWASI != 0
 /* UVWASI requires larger native stack */
-#define RESERVED_BYTES_TO_NATIVE_STACK_BOUNDARY (4096 * 6)
+#define WASM_STACK_GUARD_SIZE (4096 * 6)
 #else
-#define RESERVED_BYTES_TO_NATIVE_STACK_BOUNDARY (1024)
+#define WASM_STACK_GUARD_SIZE (1024)
 #endif
 #endif
 
@@ -346,10 +390,6 @@
 #define BLOCK_ADDR_CACHE_SIZE 64
 #endif
 #define BLOCK_ADDR_CONFLICT_SIZE 2
-
-#ifndef WASM_ENABLE_SPEC_TEST
-#define WASM_ENABLE_SPEC_TEST 0
-#endif
 
 /* Default max thread num per cluster. Can be overwrite by
     wasm_runtime_set_max_thread_num */

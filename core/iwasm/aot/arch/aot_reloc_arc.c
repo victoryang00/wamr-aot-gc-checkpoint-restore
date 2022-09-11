@@ -51,6 +51,19 @@ void __mulsf3();
 void __subdf3();
 void __subsf3();
 void __truncdfsf2();
+void __floatunsisf();
+void __fixunsdfsi();
+void __floatdisf();
+void __floatdidf();
+void __fixdfdi();
+void __ltsf2();
+void __gesf2();
+void __eqdf2();
+void __nedf2();
+void __ltsf2();
+void __nesf2();
+void __unordsf2();
+void __fixunssfsi();
 #else
 void __ac_push_13_to_13();
 void __ac_push_13_to_14();
@@ -158,6 +171,19 @@ static SymbolMap target_sym_map[] = {
     REG_SYM(__subdf3),
     REG_SYM(__subsf3),
     REG_SYM(__truncdfsf2),
+    REG_SYM(__floatunsisf),
+    REG_SYM(__fixunsdfsi),
+    REG_SYM(__floatdisf),
+    REG_SYM(__floatdidf),
+    REG_SYM(__fixdfdi),
+    REG_SYM(__ltsf2),
+    REG_SYM(__gesf2),
+    REG_SYM(__eqdf2),
+    REG_SYM(__nedf2),
+    REG_SYM(__ltsf2),
+    REG_SYM(__nesf2),
+    REG_SYM(__unordsf2),
+    REG_SYM(__fixunssfsi),
 #else
     REG_SYM(__ac_push_13_to_13),
     REG_SYM(__ac_push_13_to_14),

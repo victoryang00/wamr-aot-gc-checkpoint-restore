@@ -1,7 +1,7 @@
 # Copyright (C) 2019 Intel Corporation.  All rights reserved.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-cmake_minimum_required (VERSION 2.8)
+cmake_minimum_required (VERSION 2.9)
 
 project (iwasm)
 
@@ -44,6 +44,11 @@ if (NOT DEFINED WAMR_BUILD_JIT)
   set (WAMR_BUILD_JIT 0)
 endif ()
 
+if (NOT DEFINED WAMR_BUILD_FAST_JIT)
+  # Disable Fast JIT by default
+  set (WAMR_BUILD_FAST_JIT 0)
+endif ()
+
 if (NOT DEFINED WAMR_BUILD_LIBC_BUILTIN)
   # Enable libc builtin support by default
   set (WAMR_BUILD_LIBC_BUILTIN 1)
@@ -53,6 +58,11 @@ if (NOT DEFINED WAMR_BUILD_LIBC_WASI)
   # Enable libc wasi support by default
   set (WAMR_BUILD_LIBC_WASI 1)
 endif ()
+
+if (NOT DEFINED WAMR_BUILD_LIB_RATS)
+  # Disable lib rats support by default
+  set (WAMR_BUILD_LIB_RATS 0)
+endif()
 
 if (NOT DEFINED WAMR_BUILD_FAST_INTERP)
   # Enable fast interpreter
@@ -79,7 +89,7 @@ if (COLLECT_CODE_COVERAGE EQUAL 1)
 endif ()
 
 set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
-set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99 -ffunction-sections -fdata-sections \
+set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu11 -ffunction-sections -fdata-sections \
                                      -Wall -Wno-unused-parameter -Wno-pedantic \
                                      -nostdinc -fvisibility=hidden -fpie" )
 
@@ -95,3 +105,15 @@ add_custom_command (
              COMMAND ${CMAKE_AR} rc libvmlib_untrusted.a untrusted/*.o)
 
 add_custom_target (vmlib_untrusted ALL DEPENDS libvmlib_untrusted.a)
+
+if (WAMR_BUILD_LIB_RATS EQUAL 1)
+    execute_process(
+        COMMAND bash -c "sed -i -E 's/^#define LIB_RATS 0 /#define LIB_RATS 1/g' ${CMAKE_CURRENT_SOURCE_DIR}/enclave-sample/Enclave/Enclave.edl"
+        OUTPUT_VARIABLE cmdOutput
+    )
+else()
+    execute_process(
+        COMMAND bash -c "sed -i -E 's/^#define LIB_RATS 1/#define LIB_RATS 0/g' ${CMAKE_CURRENT_SOURCE_DIR}/enclave-sample/Enclave/Enclave.edl"
+        OUTPUT_VARIABLE cmdOutput
+    )
+endif()
