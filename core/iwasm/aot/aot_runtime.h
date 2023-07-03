@@ -332,9 +332,6 @@ typedef struct AOTFrame {
     /* Operand stack top pointer of the current frame */
     uint32 *sp;
 
-    /* Frame reference area */
-    uint8 *frame_ref;
-
     /**
      * Frame data, the layout is:
      *  local area: parameters and local variables

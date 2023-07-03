@@ -2907,6 +2907,10 @@ aot_destroy_comp_context(AOTCompContext *comp_ctx)
         wasm_runtime_free(comp_ctx->target_cpu);
     }
 
+    if (comp_ctx->aot_frame) {
+        wasm_runtime_free(comp_ctx->aot_frame);
+    }
+
     wasm_runtime_free(comp_ctx);
 }
 
@@ -2985,7 +2989,8 @@ aot_get_native_symbol_index(AOTCompContext *comp_ctx, const char *symbol)
 }
 
 void
-aot_value_stack_push(AOTValueStack *stack, AOTValue *value)
+aot_value_stack_push(const AOTCompContext *comp_ctx, AOTValueStack *stack,
+                     AOTValue *value)
 {
     if (!stack->value_list_head)
         stack->value_list_head = stack->value_list_end = value;
@@ -2994,10 +2999,35 @@ aot_value_stack_push(AOTValueStack *stack, AOTValue *value)
         value->prev = stack->value_list_end;
         stack->value_list_end = value;
     }
+
+    switch (value->type) {
+        case VALUE_TYPE_I32:
+        case VALUE_TYPE_I1:
+            push_i32(comp_ctx->aot_frame, value);
+            break;
+        case VALUE_TYPE_I64:
+            push_i64(comp_ctx->aot_frame, value);
+            break;
+        case VALUE_TYPE_F32:
+            push_f32(comp_ctx->aot_frame, value);
+            break;
+        case VALUE_TYPE_F64:
+            push_f64(comp_ctx->aot_frame, value);
+            break;
+        case VALUE_TYPE_V128:
+            push_v128(comp_ctx->aot_frame, value);
+            break;
+        case VALUE_TYPE_FUNCREF:
+        case VALUE_TYPE_EXTERNREF:
+            push_ref(comp_ctx->aot_frame, value);
+            break;
+        default:
+            bh_assert(0);
+    }
 }
 
 AOTValue *
-aot_value_stack_pop(AOTValueStack *stack)
+aot_value_stack_pop(const AOTCompContext *comp_ctx, AOTValueStack *stack)
 {
     AOTValue *value = stack->value_list_end;
 
@@ -3009,6 +3039,35 @@ aot_value_stack_pop(AOTValueStack *stack)
         stack->value_list_end = stack->value_list_end->prev;
         stack->value_list_end->next = NULL;
         value->prev = NULL;
+    }
+
+    bh_assert(value);
+    bh_assert(value->value == (comp_ctx->aot_frame->sp - 1)->value);
+    bh_assert(value->type == (comp_ctx->aot_frame->sp - 1)->type);
+
+    switch (value->type) {
+        case VALUE_TYPE_I32:
+        case VALUE_TYPE_I1:
+            pop_i32(comp_ctx->aot_frame);
+            break;
+        case VALUE_TYPE_I64:
+            pop_i64(comp_ctx->aot_frame);
+            break;
+        case VALUE_TYPE_F32:
+            pop_f32(comp_ctx->aot_frame);
+            break;
+        case VALUE_TYPE_F64:
+            pop_f64(comp_ctx->aot_frame);
+            break;
+        case VALUE_TYPE_V128:
+            pop_v128(comp_ctx->aot_frame);
+            break;
+        case VALUE_TYPE_FUNCREF:
+        case VALUE_TYPE_EXTERNREF:
+            pop_i32(comp_ctx->aot_frame);
+            break;
+        default:
+            bh_assert(0);
     }
 
     return value;

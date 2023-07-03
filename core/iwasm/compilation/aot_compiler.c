@@ -161,6 +161,98 @@ aot_validate_wasm(AOTCompContext *comp_ctx)
         goto build_atomic_rmw;
 
 static bool
+init_comp_frame(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
+                uint32 func_idx)
+{
+    AOTCompFrame *aot_frame;
+    WASMModule *wasm_module = comp_ctx->comp_data->wasm_module;
+    AOTFunc *aot_func = func_ctx->aot_func;
+    AOTFuncType *func_type = aot_func->func_type;
+    uint32 max_local_cell_num =
+        aot_func->param_cell_num + aot_func->local_cell_num;
+    uint32 max_stack_cell_num = aot_func->max_stack_cell_num;
+    uint32 all_cell_num = max_local_cell_num + max_stack_cell_num;
+    uint32 i, n;
+    uint64 total_size;
+    uint8 local_type;
+
+    if (comp_ctx->aot_frame) {
+        wasm_runtime_free(comp_ctx->aot_frame);
+        comp_ctx->aot_frame = NULL;
+    }
+
+    total_size = offsetof(AOTCompFrame, lp)
+                 + (uint64)sizeof(AOTValueSlot) * all_cell_num;
+
+    if (total_size > UINT32_MAX
+        || !(comp_ctx->aot_frame = aot_frame =
+                 wasm_runtime_malloc((uint32)total_size))) {
+        aot_set_last_error("allocate memory failed.");
+        return false;
+    }
+
+    aot_frame->cur_wasm_module = wasm_module;
+    aot_frame->cur_wasm_func = wasm_module->functions[func_idx];
+    aot_frame->cur_wasm_func_idx =
+        func_idx + wasm_module->import_function_count;
+    aot_frame->comp_ctx = comp_ctx;
+    aot_frame->func_ctx = func_ctx;
+
+    aot_frame->max_local_cell_num = max_local_cell_num;
+    aot_frame->max_stack_cell_num = max_stack_cell_num;
+
+    aot_frame->ip = aot_frame->cur_wasm_func->code;
+    aot_frame->committed_ip = NULL;
+    aot_frame->sp = aot_frame->lp + max_local_cell_num;
+    aot_frame->committed_sp = NULL;
+
+    n = 0;
+
+    /* Set all locals dirty since they were set to llvm value but
+       hasn't been committed to the AOT/JIT stack frame */
+    for (i = 0; i < func_type->param_count + aot_func->local_count; i++) {
+        if (i < func_type->param_count)
+            local_type = func_type->types[i];
+        else
+            local_type = aot_func->local_types[i - func_type->param_count];
+
+        switch (local_type) {
+            case VALUE_TYPE_I32:
+                set_local_i32(comp_ctx->aot_frame, n, func_ctx->locals[i]);
+                n++;
+                break;
+            case VALUE_TYPE_I64:
+                set_local_i64(comp_ctx->aot_frame, n, func_ctx->locals[i]);
+                n += 2;
+                break;
+            case VALUE_TYPE_F32:
+                set_local_f32(comp_ctx->aot_frame, n, func_ctx->locals[i]);
+                n++;
+                break;
+            case VALUE_TYPE_F64:
+                set_local_i64(comp_ctx->aot_frame, n, func_ctx->locals[i]);
+                n += 2;
+                break;
+            case VALUE_TYPE_V128:
+                set_local_v128(comp_ctx->aot_frame, n, func_ctx->locals[i]);
+                n += 4;
+                break;
+            case VALUE_TYPE_FUNCREF:
+            case VALUE_TYPE_EXTERNREF:
+                set_local_ref(comp_ctx->aot_frame, n, func_ctx->locals[i],
+                              local_type);
+                n++;
+                break;
+            default:
+                bh_assert(0);
+                break;
+        }
+    }
+
+    return true;
+}
+
+static bool
 aot_compile_func(AOTCompContext *comp_ctx, uint32 func_index)
 {
     AOTFuncContext *func_ctx = comp_ctx->func_ctxes[func_index];
@@ -184,6 +276,10 @@ aot_compile_func(AOTCompContext *comp_ctx, uint32 func_index)
 #if WASM_ENABLE_DEBUG_AOT != 0
     LLVMMetadataRef location;
 #endif
+
+    if (!init_comp_frame(comp_ctx, func_ctx, func_index)) {
+        return false;
+    }
 
     /* Start to translate the opcodes */
     LLVMPositionBuilderAtEnd(

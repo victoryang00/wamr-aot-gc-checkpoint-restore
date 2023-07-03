@@ -47,6 +47,10 @@ bh_static_assert(offsetof(AOTTableInstance, elems) == 8);
 
 bh_static_assert(offsetof(AOTModuleInstanceExtra, stack_sizes) == 0);
 
+bh_static_assert(offsetof(AOTFrame, ip) == sizeof(uintptr_t) * 4);
+bh_static_assert(offsetof(AOTFrame, sp) == sizeof(uintptr_t) * 5);
+bh_static_assert(offsetof(AOTFrame, lp) == sizeof(uintptr_t) * 6);
+
 static void
 set_error_buf(char *error_buf, uint32 error_buf_size, const char *string)
 {
@@ -2702,7 +2706,6 @@ aot_alloc_frame(WASMExecEnv *exec_env, uint32 func_index)
     frame->func_perf_prof_info = func_perf_prof;
 #endif
     frame->sp = frame->lp + max_local_cell_num;
-    frame->frame_ref = (uint8 *)(frame->sp + max_stack_cell_num);
 
     frame->prev_frame = (AOTFrame *)exec_env->cur_frame;
     exec_env->cur_frame = (struct WASMInterpFrame *)frame;

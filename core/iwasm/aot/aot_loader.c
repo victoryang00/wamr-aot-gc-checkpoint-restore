@@ -1748,28 +1748,32 @@ load_function_section(const uint8 *buf, const uint8 *buf_end, AOTModule *module,
     }
 
     size = sizeof(uint32) * (uint64)module->func_count;
-#if WASM_ENABLE_DUMP_CALL_STACK != 0 || WASM_ENABLE_PERF_PROFILING != 0
+
     if (size > 0) {
+#if WASM_ENABLE_DUMP_CALL_STACK != 0 || WASM_ENABLE_PERF_PROFILING != 0
         if (!(module->max_local_cell_nums =
-                  loader_malloc(size, error_buf, error_buf_size))
-            || !(module->max_stack_cell_nums =
-                     loader_malloc(size, error_buf, error_buf_size))) {
+                  loader_malloc(size, error_buf, error_buf_size))) {
             return false;
         }
-    }
 
-    for (i = 0; i < module->func_count; i++) {
-        read_uint32(p, p_end, module->max_local_cell_nums[i]);
-    }
+        for (i = 0; i < module->func_count; i++) {
+            read_uint32(p, p_end, module->max_local_cell_nums[i]);
+        }
 
-    for (i = 0; i < module->func_count; i++) {
-        read_uint32(p, p_end, module->max_stack_cell_nums[i]);
-    }
+        if (!(module->max_stack_cell_nums =
+                  loader_malloc(size, error_buf, error_buf_size))) {
+            return false;
+        }
+
+        for (i = 0; i < module->func_count; i++) {
+            read_uint32(p, p_end, module->max_stack_cell_nums[i]);
+        }
 #else
-    /* Ignore max_local_cell_num && max_stack_cell_num of each function */
-    CHECK_BUF(p, p_end, size);
-    p += size;
+        /* Ignore max_local_cell_num and max_stack_cell_num of each function */
+        CHECK_BUF(p, p_end, ((uint32)size * 2));
+        p += (uint32)size * 2;
 #endif
+    }
 
     if (p != buf_end) {
         set_error_buf(error_buf, error_buf_size,
