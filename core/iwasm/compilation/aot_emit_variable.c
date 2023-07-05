@@ -73,7 +73,9 @@ aot_compile_op_set_local(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     POP(value, local_type);
 
     if (comp_ctx->aot_frame) {
-        n = comp_ctx->aot_frame->cur_wasm_func->local_offsets[local_idx] / 4;
+        /* Get the slot index */
+        n = comp_ctx->aot_frame->cur_wasm_func->local_offsets[local_idx];
+        bh_assert(comp_ctx->aot_frame->lp[n].type == local_type);
 
         switch (local_type) {
             case VALUE_TYPE_I32:
@@ -86,7 +88,7 @@ aot_compile_op_set_local(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
                 set_local_f32(comp_ctx->aot_frame, n, value);
                 break;
             case VALUE_TYPE_F64:
-                set_local_i64(comp_ctx->aot_frame, n, value);
+                set_local_f64(comp_ctx->aot_frame, n, value);
                 break;
             case VALUE_TYPE_V128:
                 set_local_v128(comp_ctx->aot_frame, n, value);

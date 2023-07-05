@@ -234,6 +234,8 @@ typedef struct AOTFuncContext {
 
     LLVMValueRef cur_exception;
 
+    LLVMValueRef cur_frame;
+
     bool mem_space_unchanged;
     AOTCheckedAddrList checked_addr_list;
 
@@ -553,7 +555,7 @@ AOTValue *
 aot_value_stack_pop(const AOTCompContext *comp_ctx, AOTValueStack *stack);
 
 void
-aot_value_stack_destroy(AOTValueStack *stack);
+aot_value_stack_destroy(AOTCompContext *comp_ctx, AOTValueStack *stack);
 
 void
 aot_block_stack_push(AOTBlockStack *stack, AOTBlock *block);
@@ -562,10 +564,10 @@ AOTBlock *
 aot_block_stack_pop(AOTBlockStack *stack);
 
 void
-aot_block_stack_destroy(AOTBlockStack *stack);
+aot_block_stack_destroy(AOTCompContext *comp_ctx, AOTBlockStack *stack);
 
 void
-aot_block_destroy(AOTBlock *block);
+aot_block_destroy(AOTCompContext *comp_ctx, AOTBlock *block);
 
 LLVMTypeRef
 wasm_type_to_llvm_type(const AOTLLVMTypes *llvm_types, uint8 wasm_type);

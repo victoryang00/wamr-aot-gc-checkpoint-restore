@@ -136,7 +136,7 @@ offset_of_local(AOTCompContext *comp_ctx, unsigned n)
  * @param begin the begin value slot to commit
  * @param end the end value slot to commit
  */
-void
+bool
 gen_commit_values(AOTCompFrame *frame, AOTValueSlot *begin, AOTValueSlot *end);
 
 /**
@@ -144,7 +144,7 @@ gen_commit_values(AOTCompFrame *frame, AOTValueSlot *begin, AOTValueSlot *end);
  *
  * @param frame the frame information
  */
-void
+bool
 gen_commit_sp_ip(AOTCompFrame *frame);
 
 /**
@@ -152,10 +152,10 @@ gen_commit_sp_ip(AOTCompFrame *frame);
  *
  * @param frame the frame information
  */
-static inline void
+static inline bool
 gen_commit_for_branch(AOTCompFrame *frame)
 {
-    gen_commit_values(frame, frame->lp, frame->sp);
+    return gen_commit_values(frame, frame->lp, frame->sp);
 }
 
 /**
@@ -163,11 +163,13 @@ gen_commit_for_branch(AOTCompFrame *frame)
  *
  * @param frame the frame information
  */
-static inline void
+static inline bool
 gen_commit_for_exception(AOTCompFrame *frame)
 {
-    gen_commit_values(frame, frame->lp, frame->lp + frame->max_local_cell_num);
-    gen_commit_sp_ip(frame);
+    if (!gen_commit_values(frame, frame->lp,
+                           frame->lp + frame->max_local_cell_num))
+        return false;
+    return gen_commit_sp_ip(frame);
 }
 
 /**
@@ -175,75 +177,80 @@ gen_commit_for_exception(AOTCompFrame *frame)
  *
  * @param frame the frame information
  */
-static inline void
+static inline bool
 gen_commit_for_all(AOTCompFrame *frame)
 {
-    gen_commit_values(frame, frame->lp, frame->sp);
-    gen_commit_sp_ip(frame);
+    if (!gen_commit_values(frame, frame->lp, frame->sp))
+        return false;
+    return gen_commit_sp_ip(frame);
 }
 
 static inline void
-clear_values(AOTCompFrame *frame)
+push_32bit(AOTCompFrame *frame, AOTValue *aot_value)
 {
-    size_t total_size =
-        sizeof(AOTValueSlot)
-        * (frame->max_local_cell_num + frame->max_stack_cell_num);
-    memset(frame->lp, 0, total_size);
-    frame->committed_sp = NULL;
-    frame->committed_ip = NULL;
+    frame->sp->value = aot_value->value;
+    frame->sp->type = aot_value->type;
+    frame->sp->dirty = 1;
+    frame->sp++;
+}
+
+static inline void
+push_64bit(AOTCompFrame *frame, AOTValue *aot_value)
+{
+    push_32bit(frame, aot_value);
+    push_32bit(frame, aot_value);
 }
 
 static inline void
 push_i32(AOTCompFrame *frame, AOTValue *aot_value)
 {
-    frame->sp->value = aot_value->value;
-    frame->sp->type = aot_value->type;
-    frame->sp->dirty = 1;
-    frame->sp++;
+    bh_assert(aot_value->type == VALUE_TYPE_I32
+              || aot_value->type == VALUE_TYPE_I1);
+    push_32bit(frame, aot_value);
 }
 
 static inline void
 push_i64(AOTCompFrame *frame, AOTValue *aot_value)
 {
-    frame->sp->value = aot_value->value;
-    frame->sp->type = aot_value->type;
-    frame->sp->dirty = 1;
-    frame->sp++;
-    frame->sp->value = aot_value->value;
-    frame->sp->type = aot_value->type;
-    frame->sp->dirty = 1;
-    frame->sp++;
+    bh_assert(aot_value->type == VALUE_TYPE_I64);
+    push_64bit(frame, aot_value);
 }
 
 static inline void
-push_f32(AOTCompFrame *frame, AOTValue *value)
+push_f32(AOTCompFrame *frame, AOTValue *aot_value)
 {
-    push_i32(frame, value);
+    bh_assert(aot_value->type == VALUE_TYPE_F32);
+    push_32bit(frame, aot_value);
 }
 
 static inline void
-push_f64(AOTCompFrame *frame, AOTValue *value)
+push_f64(AOTCompFrame *frame, AOTValue *aot_value)
 {
-    push_i64(frame, value);
+    bh_assert(aot_value->type == VALUE_TYPE_F64);
+    push_64bit(frame, aot_value);
 }
 
 static inline void
-push_v128(AOTCompFrame *frame, AOTValue *value)
+push_v128(AOTCompFrame *frame, AOTValue *aot_value)
 {
-    push_i64(frame, value);
-    push_i64(frame, value);
+    bh_assert(aot_value->type == VALUE_TYPE_V128);
+    push_64bit(frame, aot_value);
+    push_64bit(frame, aot_value);
 }
 
 static inline void
-push_ref(AOTCompFrame *frame, AOTValue *value)
+push_ref(AOTCompFrame *frame, AOTValue *aot_value)
 {
     bh_assert(frame->comp_ctx->enable_ref_types);
-    push_i32(frame, value);
+    push_32bit(frame, aot_value);
 }
 
 static inline void
 pop_i32(AOTCompFrame *frame)
 {
+    bh_assert(frame->sp - frame->lp >= 1);
+    bh_assert((frame->sp - 1)->type == VALUE_TYPE_I32
+              || (frame->sp - 1)->type == VALUE_TYPE_I1);
     frame->sp--;
     memset(frame->sp, 0, sizeof(*frame->sp));
 }
@@ -251,6 +258,9 @@ pop_i32(AOTCompFrame *frame)
 static inline void
 pop_i64(AOTCompFrame *frame)
 {
+    bh_assert(frame->sp - frame->lp >= 2);
+    bh_assert((frame->sp - 1)->type == VALUE_TYPE_I64
+              && (frame->sp - 2)->type == VALUE_TYPE_I64);
     frame->sp -= 2;
     memset(frame->sp, 0, sizeof(*frame->sp) * 2);
 }
@@ -258,6 +268,8 @@ pop_i64(AOTCompFrame *frame)
 static inline void
 pop_f32(AOTCompFrame *frame)
 {
+    bh_assert(frame->sp - frame->lp >= 1);
+    bh_assert((frame->sp - 1)->type == VALUE_TYPE_F32);
     frame->sp--;
     memset(frame->sp, 0, sizeof(*frame->sp));
 }
@@ -265,6 +277,9 @@ pop_f32(AOTCompFrame *frame)
 static inline void
 pop_f64(AOTCompFrame *frame)
 {
+    bh_assert(frame->sp - frame->lp >= 2);
+    bh_assert((frame->sp - 1)->type == VALUE_TYPE_F64
+              && (frame->sp - 2)->type == VALUE_TYPE_F64);
     frame->sp -= 2;
     memset(frame->sp, 0, sizeof(*frame->sp) * 2);
 }
@@ -272,6 +287,11 @@ pop_f64(AOTCompFrame *frame)
 static inline void
 pop_v128(AOTCompFrame *frame)
 {
+    bh_assert(frame->sp - frame->lp >= 4);
+    bh_assert((frame->sp - 1)->type == VALUE_TYPE_V128
+              && (frame->sp - 2)->type == VALUE_TYPE_V128
+              && (frame->sp - 3)->type == VALUE_TYPE_V128
+              && (frame->sp - 4)->type == VALUE_TYPE_V128);
     frame->sp -= 4;
     memset(frame->sp, 0, sizeof(*frame->sp) * 4);
 }
@@ -279,8 +299,19 @@ pop_v128(AOTCompFrame *frame)
 static inline void
 pop_ref(AOTCompFrame *frame)
 {
-    bh_assert(frame->comp_ctx->enable_ref_types);
-    pop_i32(frame);
+    bh_assert(frame->sp - frame->lp >= 1);
+    bh_assert((frame->sp - 1)->type == VALUE_TYPE_FUNCREF
+              || (frame->sp - 1)->type == VALUE_TYPE_EXTERNREF);
+    frame->sp -= 1;
+    memset(frame->sp, 0, sizeof(*frame->sp) * 1);
+}
+
+static inline void
+pop(AOTCompFrame *frame, uint32 n)
+{
+    bh_assert(frame->sp - frame->lp >= n);
+    frame->sp -= n;
+    memset(frame->sp, 0, sizeof(*frame->sp) * n);
 }
 
 static inline void

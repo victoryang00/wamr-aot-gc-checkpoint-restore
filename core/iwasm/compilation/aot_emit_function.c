@@ -528,6 +528,10 @@ aot_compile_op_call(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     }
 #endif
 
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
+        goto fail;
+    }
+
     /* Check function index */
     if (func_idx >= import_func_count + func_count) {
         aot_set_last_error("Function index out of range.");
@@ -1075,6 +1079,10 @@ aot_compile_op_call_indirect(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     uint64 total_size;
     char buf[32];
     bool ret = false;
+
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
+        goto fail;
+    }
 
     /* Check function type index */
     if (type_idx >= comp_ctx->comp_data->func_type_count) {

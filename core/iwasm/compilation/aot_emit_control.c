@@ -176,10 +176,15 @@ handle_next_reachable_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
         comp_ctx, func_ctx,
         (*p_frame_ip - 1) - comp_ctx->comp_data->wasm_module->buf_code);
 #endif
+
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
+        return false;
+    }
+
     if (block->label_type == LABEL_TYPE_IF && block->llvm_else_block
         && *p_frame_ip <= block->wasm_code_else) {
         /* Clear value stack and start to translate else branch */
-        aot_value_stack_destroy(&block->value_stack);
+        aot_value_stack_destroy(comp_ctx, &block->value_stack);
         /* Recover parameters of else branch */
         for (i = 0; i < block->param_count; i++)
             PUSH(block->else_param_phis[i], block->param_types[i]);
@@ -196,7 +201,7 @@ handle_next_reachable_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
             if (block->llvm_else_block && !block->skip_wasm_code_else
                 && *p_frame_ip <= block->wasm_code_else) {
                 /* Clear value stack and start to translate else branch */
-                aot_value_stack_destroy(&block->value_stack);
+                aot_value_stack_destroy(comp_ctx, &block->value_stack);
                 SET_BUILDER_POS(block->llvm_else_block);
                 *p_frame_ip = block->wasm_code_else + 1;
                 /* Push back the block */
@@ -211,7 +216,7 @@ handle_next_reachable_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
         }
 
         frame_ip = block->wasm_code_end;
-        aot_block_destroy(block);
+        aot_block_destroy(comp_ctx, block);
         block = block_prev;
     }
 
@@ -266,7 +271,7 @@ handle_next_reachable_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
 #endif
         }
     }
-    aot_block_destroy(block);
+    aot_block_destroy(comp_ctx, block);
     return true;
 fail:
     return false;
@@ -435,6 +440,10 @@ aot_compile_op_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     block->block_index = func_ctx->block_stack.block_index[label_type];
     func_ctx->block_stack.block_index[label_type]++;
 
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
+        goto fail;
+    }
+
     if (label_type == LABEL_TYPE_BLOCK || label_type == LABEL_TYPE_LOOP) {
         /* Create block */
         format_block_name(name, sizeof(name), block->block_index, label_type,
@@ -462,7 +471,7 @@ aot_compile_op_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
                                      false, NULL, NULL))) {
                 goto fail;
             }
-            aot_block_destroy(block);
+            aot_block_destroy(comp_ctx, block);
             return aot_handle_next_reachable_block(comp_ctx, func_ctx,
                                                    p_frame_ip);
         }
@@ -542,7 +551,7 @@ aot_compile_op_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
                 }
                 else {
                     /* skip the block */
-                    aot_block_destroy(block);
+                    aot_block_destroy(comp_ctx, block);
                     *p_frame_ip = end_addr + 1;
                 }
             }
@@ -555,7 +564,7 @@ aot_compile_op_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
 
     return true;
 fail:
-    aot_block_destroy(block);
+    aot_block_destroy(comp_ctx, block);
     return false;
 }
 
@@ -576,6 +585,10 @@ aot_compile_op_else(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     if (block->label_type != LABEL_TYPE_IF
         || (!block->skip_wasm_code_else && !block->llvm_else_block)) {
         aot_set_last_error("Invalid WASM block type.");
+        return false;
+    }
+
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
         return false;
     }
 
@@ -607,7 +620,7 @@ aot_compile_op_else(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
         /* Clear value stack, recover param values
          * and start to translate else branch.
          */
-        aot_value_stack_destroy(&block->value_stack);
+        aot_value_stack_destroy(comp_ctx, &block->value_stack);
         for (i = 0; i < block->param_count; i++)
             PUSH(block->else_param_phis[i], block->param_types[i]);
         SET_BUILDER_POS(block->llvm_else_block);
@@ -635,6 +648,10 @@ aot_compile_op_end(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     /* Check block stack */
     if (!(block = func_ctx->block_stack.block_list_end)) {
         aot_set_last_error("WASM block stack underflow.");
+        return false;
+    }
+
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
         return false;
     }
 
@@ -748,6 +765,10 @@ aot_compile_op_br(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     char name[32];
     uint32 i, param_index, result_index;
 
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
+        return false;
+    }
+
 #if WASM_ENABLE_THREAD_MGR != 0
     /* Insert suspend check point */
     if (comp_ctx->enable_thread_mgr) {
@@ -810,6 +831,10 @@ aot_compile_op_br_if(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     char name[32];
     uint32 i, param_index, result_index;
     uint64 size;
+
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
+        return false;
+    }
 
 #if WASM_ENABLE_THREAD_MGR != 0
     /* Insert suspend check point */
@@ -947,6 +972,10 @@ aot_compile_op_br_table(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     uint32 param_index, result_index;
     uint64 size;
     char name[32];
+
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
+        return false;
+    }
 
 #if WASM_ENABLE_THREAD_MGR != 0
     /* Insert suspend check point */
@@ -1099,6 +1128,11 @@ aot_compile_op_return(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
         comp_ctx, func_ctx,
         (*p_frame_ip - 1) - comp_ctx->comp_data->wasm_module->buf_code);
 #endif
+
+    if (comp_ctx->aot_frame && !gen_commit_for_all(comp_ctx->aot_frame)) {
+        return false;
+    }
+
     if (block_func->result_count) {
         /* Store extra result values to function parameters */
         for (i = 0; i < block_func->result_count - 1; i++) {
