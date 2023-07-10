@@ -3096,7 +3096,7 @@ aot_value_stack_pop(const AOTCompContext *comp_ctx, AOTValueStack *stack)
                 break;
             case VALUE_TYPE_FUNCREF:
             case VALUE_TYPE_EXTERNREF:
-                pop_i32(comp_ctx->aot_frame);
+                pop_ref(comp_ctx->aot_frame);
                 break;
             default:
                 bh_assert(0);
@@ -3111,36 +3111,11 @@ void
 aot_value_stack_destroy(AOTCompContext *comp_ctx, AOTValueStack *stack)
 {
     AOTValue *value = stack->value_list_head, *p;
-    uint32 n = 0;
 
     while (value) {
-        switch (value->type) {
-            case VALUE_TYPE_I32:
-            case VALUE_TYPE_I1:
-            case VALUE_TYPE_F32:
-            case VALUE_TYPE_FUNCREF:
-            case VALUE_TYPE_EXTERNREF:
-                n++;
-                break;
-            case VALUE_TYPE_I64:
-            case VALUE_TYPE_F64:
-                n += 2;
-                break;
-            case VALUE_TYPE_V128:
-                n += 4;
-                break;
-            default:
-                bh_assert(0);
-                break;
-        }
-
         p = value->next;
         wasm_runtime_free(value);
         value = p;
-    }
-
-    if (comp_ctx->aot_frame) {
-        pop(comp_ctx->aot_frame, n);
     }
 
     stack->value_list_head = NULL;

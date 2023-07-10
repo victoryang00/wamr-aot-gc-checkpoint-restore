@@ -125,17 +125,8 @@ typedef struct AOTCompFrame {
     /* Max operand stack slot number */
     uint32 max_stack_cell_num;
 
-    /* Instruction pointer */
-    uint8 *ip;
-
     /* Stack top pointer */
     AOTValueSlot *sp;
-
-    /* Committed instruction pointer */
-    uint8 *committed_ip;
-
-    /* Committed stack top pointer */
-    AOTValueSlot *committed_sp;
 
     /* Local variables + stack operands */
     AOTValueSlot lp[1];

@@ -48,7 +48,7 @@ bh_static_assert(offsetof(AOTTableInstance, elems) == 8);
 
 bh_static_assert(offsetof(AOTModuleInstanceExtra, stack_sizes) == 0);
 
-bh_static_assert(offsetof(AOTFrame, ip) == sizeof(uintptr_t) * 4);
+bh_static_assert(offsetof(AOTFrame, ip_offset) == sizeof(uintptr_t) * 4);
 bh_static_assert(offsetof(AOTFrame, sp) == sizeof(uintptr_t) * 5);
 bh_static_assert(offsetof(AOTFrame, lp) == sizeof(uintptr_t) * 6);
 
@@ -2701,10 +2701,6 @@ aot_alloc_frame(WASMExecEnv *exec_env, uint32 func_index)
                           "wasm operand stack overflow");
         return false;
     }
-
-    /* Initialize local variables */
-    /* TODO: only initialze non parameters */
-    memset(frame->lp, 0, sizeof(uint32) * max_local_cell_num);
 
 #if WASM_ENABLE_PERF_PROFILING != 0
     frame->time_started = (uintptr_t)os_time_get_boot_microsecond();

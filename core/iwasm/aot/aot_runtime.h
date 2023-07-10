@@ -326,8 +326,8 @@ typedef struct AOTFrame {
     /* Used when performance profiling is enabled */
     AOTFuncPerfProfInfo *func_perf_prof_info;
 
-    /* Instruction pointer of the bytecode array */
-    uint8 *ip;
+    /* Instruction pointer: offset to the bytecode array */
+    uintptr_t ip_offset;
 
     /* Operand stack top pointer of the current frame */
     uint32 *sp;

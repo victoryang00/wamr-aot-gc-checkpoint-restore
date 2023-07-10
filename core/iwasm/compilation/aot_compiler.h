@@ -122,7 +122,7 @@ static inline uint32
 offset_of_local(AOTCompContext *comp_ctx, unsigned n)
 {
     if (!comp_ctx->is_jit_mode)
-        return (uint32)sizeof(uintptr_t) * 6 + sizeof(uint32) * n;
+        return comp_ctx->pointer_size * 6 + sizeof(uint32) * n;
     else
         return offsetof(WASMInterpFrame, lp) + sizeof(uint32) * n;
 }
@@ -133,11 +133,9 @@ offset_of_local(AOTCompContext *comp_ctx, unsigned n)
  * through the frame.
  *
  * @param frame the frame information
- * @param begin the begin value slot to commit
- * @param end the end value slot to commit
  */
 bool
-gen_commit_values(AOTCompFrame *frame, AOTValueSlot *begin, AOTValueSlot *end);
+gen_commit_values(AOTCompFrame *frame);
 
 /**
  * Generate instructions to commit SP and IP pointers to the frame.
@@ -145,45 +143,10 @@ gen_commit_values(AOTCompFrame *frame, AOTValueSlot *begin, AOTValueSlot *end);
  * @param frame the frame information
  */
 bool
-gen_commit_sp_ip(AOTCompFrame *frame);
+gen_commit_sp_ip(AOTCompFrame *frame, AOTValueSlot *sp, uint8 *ip);
 
-/**
- * Generate commit instructions for the block end.
- *
- * @param frame the frame information
- */
-static inline bool
-gen_commit_for_branch(AOTCompFrame *frame)
-{
-    return gen_commit_values(frame, frame->lp, frame->sp);
-}
-
-/**
- * Generate commit instructions for exception checks.
- *
- * @param frame the frame information
- */
-static inline bool
-gen_commit_for_exception(AOTCompFrame *frame)
-{
-    if (!gen_commit_values(frame, frame->lp,
-                           frame->lp + frame->max_local_cell_num))
-        return false;
-    return gen_commit_sp_ip(frame);
-}
-
-/**
- * Generate commit instructions to commit all status.
- *
- * @param frame the frame information
- */
-static inline bool
-gen_commit_for_all(AOTCompFrame *frame)
-{
-    if (!gen_commit_values(frame, frame->lp, frame->sp))
-        return false;
-    return gen_commit_sp_ip(frame);
-}
+bool
+gen_commit_ref_flags(AOTCompFrame *frame);
 
 static inline void
 push_32bit(AOTCompFrame *frame, AOTValue *aot_value)

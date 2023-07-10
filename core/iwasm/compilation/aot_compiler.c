@@ -217,7 +217,7 @@ store_value(AOTCompContext *comp_ctx, LLVMValueRef value, uint8 value_type,
 }
 
 bool
-gen_commit_values(AOTCompFrame *frame, AOTValueSlot *begin, AOTValueSlot *end)
+gen_commit_values(AOTCompFrame *frame)
 {
     AOTCompContext *comp_ctx = frame->comp_ctx;
     AOTFuncContext *func_ctx = frame->func_ctx;
@@ -225,7 +225,7 @@ gen_commit_values(AOTCompFrame *frame, AOTValueSlot *begin, AOTValueSlot *end)
     LLVMValueRef value;
     uint32 n;
 
-    for (p = begin; p < end; p++) {
+    for (p = frame->lp; p < frame->sp; p++) {
         if (!p->dirty)
             continue;
 
@@ -262,7 +262,9 @@ gen_commit_values(AOTCompFrame *frame, AOTValueSlot *begin, AOTValueSlot *end)
                     return false;
                 break;
             case VALUE_TYPE_V128:
-                (++p)->dirty = (++p)->dirty = (++p)->dirty = 0;
+                (++p)->dirty = 0;
+                (++p)->dirty = 0;
+                (++p)->dirty = 0;
                 if (!store_value(comp_ctx, p->value, VALUE_TYPE_V128,
                                  func_ctx->cur_frame,
                                  offset_of_local(comp_ctx, n)))
@@ -289,8 +291,122 @@ gen_commit_values(AOTCompFrame *frame, AOTValueSlot *begin, AOTValueSlot *end)
 }
 
 bool
-gen_commit_sp_ip(AOTCompFrame *frame)
+gen_commit_sp_ip(AOTCompFrame *frame, AOTValueSlot *sp, uint8 *ip)
 {
+    AOTCompContext *comp_ctx = frame->comp_ctx;
+    AOTFuncContext *func_ctx = frame->func_ctx;
+    LLVMValueRef cur_frame = func_ctx->cur_frame;
+    LLVMValueRef value_offset, value_addr, value_ptr, value;
+    LLVMTypeRef int8_ptr_ptr_type;
+    uint32 offset_ip, offset_sp, n;
+    bool is_64bit = (comp_ctx->pointer_size == sizeof(uint64)) ? true : false;
+
+    if (!comp_ctx->is_jit_mode) {
+        offset_ip = (uint32)sizeof(uintptr_t) * 4;
+        offset_sp = (uint32)sizeof(uintptr_t) * 5;
+    }
+    else {
+        offset_ip = offsetof(WASMInterpFrame, ip);
+        offset_sp = offsetof(WASMInterpFrame, sp);
+    }
+
+    /* commit ip */
+
+    if (!(value_offset = I32_CONST(offset_ip))) {
+        aot_set_last_error("llvm build const failed");
+        return false;
+    }
+
+    if (!(value_addr =
+              LLVMBuildInBoundsGEP2(comp_ctx->builder, INT8_TYPE, cur_frame,
+                                    &value_offset, 1, "ip_addr"))) {
+        aot_set_last_error("llvm build in bounds gep failed");
+        return false;
+    }
+
+    if (!(value_ptr = LLVMBuildBitCast(
+              comp_ctx->builder, value_addr,
+              is_64bit ? INT64_PTR_TYPE : INT32_PTR_TYPE, "ip_ptr"))) {
+        aot_set_last_error("llvm build bit cast failed");
+        return false;
+    }
+
+    if (!comp_ctx->is_jit_mode) {
+        if (is_64bit)
+            value =
+                I64_CONST((uint64)(uintptr_t)(ip - func_ctx->aot_func->code));
+        else
+            value =
+                I32_CONST((uint32)(uintptr_t)(ip - func_ctx->aot_func->code));
+    }
+    else {
+        if (is_64bit)
+            value = I64_CONST((uint64)(uintptr_t)ip);
+        else
+            value = I32_CONST((uint32)(uintptr_t)ip);
+    }
+
+    if (!value) {
+        aot_set_last_error("llvm build const failed");
+        return false;
+    }
+
+    if (!LLVMBuildStore(comp_ctx->builder, value, value_ptr)) {
+        aot_set_last_error("llvm build store failed");
+        return false;
+    }
+
+    /* commit sp */
+
+    n = sp - frame->lp;
+    value = I32_CONST(offset_of_local(comp_ctx, n));
+    if (!value) {
+        aot_set_last_error("llvm build const failed");
+        return false;
+    }
+
+    if (!(value = LLVMBuildInBoundsGEP2(comp_ctx->builder, INT8_TYPE, cur_frame,
+                                        &value, 1, "sp"))) {
+        aot_set_last_error("llvm build in bounds gep failed");
+        return false;
+    }
+
+    if (!(value_offset = I32_CONST(offset_sp))) {
+        aot_set_last_error("llvm build const failed");
+        return false;
+    }
+
+    if (!(value_addr =
+              LLVMBuildInBoundsGEP2(comp_ctx->builder, INT8_TYPE, cur_frame,
+                                    &value_offset, 1, "sp_addr"))) {
+        aot_set_last_error("llvm build in bounds gep failed");
+        return false;
+    }
+
+    if (!(int8_ptr_ptr_type = LLVMPointerType(INT8_PTR_TYPE, 0))) {
+        aot_set_last_error("llvm build pointer type failed");
+        return false;
+    }
+
+    if (!(value_ptr = LLVMBuildBitCast(comp_ctx->builder, value_addr,
+                                       int8_ptr_ptr_type, "sp_ptr"))) {
+        aot_set_last_error("llvm build bit cast failed");
+        return false;
+    }
+
+    if (!LLVMBuildStore(comp_ctx->builder, value, value_ptr)) {
+        aot_set_last_error("llvm build store failed");
+        return false;
+    }
+
+    /* commit sp */
+    return true;
+}
+
+bool
+gen_commit_ref_flags(AOTCompFrame *frame)
+{
+    /* TODO */
     return true;
 }
 
@@ -302,6 +418,7 @@ init_comp_frame(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     WASMModule *wasm_module = comp_ctx->comp_data->wasm_module;
     AOTFunc *aot_func = func_ctx->aot_func;
     AOTFuncType *func_type = aot_func->func_type;
+    AOTBlock *block = func_ctx->block_stack.block_list_end;
     LLVMValueRef local_value;
     uint32 max_local_cell_num =
         aot_func->param_cell_num + aot_func->local_cell_num;
@@ -318,6 +435,10 @@ init_comp_frame(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
         comp_ctx->aot_frame = NULL;
     }
 
+    /* Allocate extra 2 cells since some operations may push more
+       operands than the number calculated in wasm loader, such as
+       PUSH_F64(F64_CONST(1.0)) in aot_compile_op_f64_promote_f32 */
+    all_cell_num += 2;
     total_size = offsetof(AOTCompFrame, lp)
                  + (uint64)sizeof(AOTValueSlot) * all_cell_num;
 
@@ -339,15 +460,15 @@ init_comp_frame(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     aot_frame->max_local_cell_num = max_local_cell_num;
     aot_frame->max_stack_cell_num = max_stack_cell_num;
 
-    aot_frame->ip = aot_frame->cur_wasm_func->code;
-    aot_frame->committed_ip = NULL;
     aot_frame->sp = aot_frame->lp + max_local_cell_num;
-    aot_frame->committed_sp = NULL;
+
+    /* Init the frame_sp_begin of the function block */
+    block->frame_sp_begin = aot_frame->sp;
 
     n = 0;
 
-    /* Set all parameters dirty since they were set to llvm value and
-       hasn't been committed to the AOT/JIT stack frame */
+    /* Set all params dirty since they were set to llvm value but
+       haven't been committed to the AOT/JIT stack frame */
     for (i = 0; i < func_type->param_count; i++) {
         local_type = func_type->types[i];
         local_value = LLVMGetParam(func_ctx->func, i + 1);
@@ -384,29 +505,36 @@ init_comp_frame(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
         }
     }
 
+    /* Set all locals dirty since they were set to llvm value but
+       haven't been committed to the AOT/JIT stack frame */
     for (i = 0; i < aot_func->local_count; i++) {
         local_type = aot_func->local_types[i];
 
         switch (local_type) {
             case VALUE_TYPE_I32:
-            case VALUE_TYPE_F32:
-            case VALUE_TYPE_FUNCREF:
-            case VALUE_TYPE_EXTERNREF:
-                comp_ctx->aot_frame->lp[n].type = local_type;
+                set_local_i32(comp_ctx->aot_frame, n, I32_ZERO);
                 n++;
                 break;
             case VALUE_TYPE_I64:
+                set_local_i64(comp_ctx->aot_frame, n, I64_ZERO);
+                n += 2;
+                break;
+            case VALUE_TYPE_F32:
+                set_local_f32(comp_ctx->aot_frame, n, F32_ZERO);
+                n++;
+                break;
             case VALUE_TYPE_F64:
-                comp_ctx->aot_frame->lp[n].type =
-                    comp_ctx->aot_frame->lp[n + 1].type = local_type;
+                set_local_f64(comp_ctx->aot_frame, n, F64_ZERO);
                 n += 2;
                 break;
             case VALUE_TYPE_V128:
-                comp_ctx->aot_frame->lp[n].type =
-                    comp_ctx->aot_frame->lp[n + 1].type =
-                        comp_ctx->aot_frame->lp[n + 2].type =
-                            comp_ctx->aot_frame->lp[n + 3].type = local_type;
+                set_local_v128(comp_ctx->aot_frame, n, V128_f64x2_ZERO);
                 n += 4;
+                break;
+            case VALUE_TYPE_FUNCREF:
+            case VALUE_TYPE_EXTERNREF:
+                set_local_ref(comp_ctx->aot_frame, n, I32_ZERO, local_type);
+                n++;
                 break;
             default:
                 bh_assert(0);
