@@ -3054,7 +3054,7 @@ wasm_interp_dump_call_stack(struct WASMExecEnv *exec_env, bool print, char *buf,
             line_buf[line_buffer_len - 2] = '\n';
         }
 
-        PRINT_OR_DUMP();
+        // PRINT_OR_DUMP();
 
         n++;
     }

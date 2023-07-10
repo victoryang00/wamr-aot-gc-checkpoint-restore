@@ -2834,7 +2834,7 @@ aot_dump_call_stack(WASMExecEnv *exec_env, bool print, char *buf, uint32 len)
             line_buf[line_buffer_len - 2] = '\n';
         }
 
-        PRINT_OR_DUMP();
+        // PRINT_OR_DUMP();
 
         n++;
     }

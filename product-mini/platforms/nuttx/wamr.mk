@@ -230,6 +230,12 @@ else
 CFLAGS += -DWASM_ENABLE_LIBC_BUILTIN=0
 endif
 
+ifeq ($(CONFIG_INTERPRETERS_WAMR_CONFIGUABLE_BOUNDS_CHECKS),y)
+CFLAGS += -DWASM_CONFIGUABLE_BOUNDS_CHECKS=1
+else
+CFLAGS += -DWASM_CONFIGUABLE_BOUNDS_CHECKS=0
+endif
+
 ifeq ($(CONFIG_INTERPRETERS_WAMR_LIBC_WASI),y)
 CFLAGS += -DWASM_ENABLE_LIBC_WASI=1
 CFLAGS += -I$(IWASM_ROOT)/libraries/libc-wasi/sandboxed-system-primitives/src
@@ -257,6 +263,15 @@ CSRCS += thread_manager.c
 VPATH += $(IWASM_ROOT)/libraries/thread-mgr
 else
 CFLAGS += -DWASM_ENABLE_THREAD_MGR=0
+endif
+
+ifeq ($(CONFIG_INTERPRETERS_WAMR_LIB_WASI_THREADS),y)
+CFLAGS += -DWASM_ENABLE_LIB_WASI_THREADS=1
+CSRCS += lib_wasi_threads_wrapper.c
+CSRCS += tid_allocator.c
+VPATH += $(IWASM_ROOT)/libraries/lib-wasi-threads
+else
+CFLAGS += -DWASM_ENABLE_LIB_WASI_THREADS=0
 endif
 
 ifeq ($(CONFIG_INTERPRETERS_WAMR_LIB_PTHREAD),y)

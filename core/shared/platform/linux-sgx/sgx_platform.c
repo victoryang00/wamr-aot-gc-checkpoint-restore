@@ -195,3 +195,9 @@ os_mprotect(void *addr, size_t size, int prot)
 void
 os_dcache_flush(void)
 {}
+
+int
+mm_modify_permissions(void* addr, size_t size, int prot)
+{
+    return 0;
+}
