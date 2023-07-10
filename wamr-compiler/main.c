@@ -543,7 +543,6 @@ main(int argc, char *argv[])
         option.size_level = 1;
         option.is_sgx_platform = true;
     }
-    option.enable_aux_stack_frame = true;
 
     wasm_file_name = argv[0];
 
