@@ -324,14 +324,16 @@ memory_instantiate(WASMModuleInstance *module_inst, WASMModuleInstance *parent,
      * so the range of ea is 0 to 8G
      */
     if (!(memory->memory_data = mapped_mem =
-              os_mmap(NULL, map_size, MMAP_PROT_NONE, MMAP_MAP_NONE))) {
+              os_mmap(NULL, map_size, MMAP_PROT_NONE, MMAP_MAP_NONE,
+                      os_get_invalid_handle()))) {
         set_error_buf(error_buf, error_buf_size, "mmap memory failed");
         goto fail1;
     }
 
 #ifdef BH_PLATFORM_WINDOWS
-    if (!os_mem_commit(mapped_mem, memory_data_size,
-                       MMAP_PROT_READ | MMAP_PROT_WRITE)) {
+    if (memory_data_size > 0
+        && !os_mem_commit(mapped_mem, memory_data_size,
+                          MMAP_PROT_READ | MMAP_PROT_WRITE)) {
         set_error_buf(error_buf, error_buf_size, "commit memory failed");
         os_munmap(mapped_mem, map_size);
         goto fail1;
@@ -384,7 +386,7 @@ memory_instantiate(WASMModuleInstance *module_inst, WASMModuleInstance *parent,
 
 #if WASM_ENABLE_SHARED_MEMORY != 0
     if (is_shared_memory) {
-        memory->is_shared_memory = true;
+        memory->is_shared_memory = 1;
         memory->ref_count = 1;
     }
 #endif
@@ -1060,7 +1062,8 @@ execute_post_instantiate_functions(WASMModuleInstance *module_inst,
            wasm functions, and ensure that the exec_env's module inst
            is the correct one. */
         module_inst_main = exec_env_main->module_inst;
-        exec_env->module_inst = (WASMModuleInstanceCommon *)module_inst;
+        wasm_exec_env_set_module_inst(exec_env,
+                                      (WASMModuleInstanceCommon *)module_inst);
     }
     else {
         /* Try using the existing exec_env */
@@ -1085,7 +1088,8 @@ execute_post_instantiate_functions(WASMModuleInstance *module_inst,
                module inst to ensure that the exec_env's module inst
                is the correct one. */
             module_inst_main = exec_env->module_inst;
-            exec_env->module_inst = (WASMModuleInstanceCommon *)module_inst;
+            wasm_exec_env_set_module_inst(
+                exec_env, (WASMModuleInstanceCommon *)module_inst);
         }
     }
 
@@ -1118,12 +1122,12 @@ execute_post_instantiate_functions(WASMModuleInstance *module_inst,
 fail:
     if (is_sub_inst) {
         /* Restore the parent exec_env's module inst */
-        exec_env_main->module_inst = module_inst_main;
+        wasm_exec_env_restore_module_inst(exec_env_main, module_inst_main);
     }
     else {
         if (module_inst_main)
             /* Restore the existing exec_env's module inst */
-            exec_env->module_inst = module_inst_main;
+            wasm_exec_env_restore_module_inst(exec_env, module_inst_main);
         if (exec_env_created)
             wasm_exec_env_destroy(exec_env_created);
     }
@@ -1192,7 +1196,8 @@ execute_malloc_function(WASMModuleInstance *module_inst, WASMExecEnv *exec_env,
                module inst to ensure that the exec_env's module inst
                is the correct one. */
             module_inst_old = exec_env->module_inst;
-            exec_env->module_inst = (WASMModuleInstanceCommon *)module_inst;
+            wasm_exec_env_set_module_inst(
+                exec_env, (WASMModuleInstanceCommon *)module_inst);
         }
     }
 
@@ -1203,7 +1208,7 @@ execute_malloc_function(WASMModuleInstance *module_inst, WASMExecEnv *exec_env,
 
     if (module_inst_old)
         /* Restore the existing exec_env's module inst */
-        exec_env->module_inst = module_inst_old;
+        wasm_exec_env_restore_module_inst(exec_env, module_inst_old);
 
     if (exec_env_created)
         wasm_exec_env_destroy(exec_env_created);
@@ -1259,7 +1264,8 @@ execute_free_function(WASMModuleInstance *module_inst, WASMExecEnv *exec_env,
                module inst to ensure that the exec_env's module inst
                is the correct one. */
             module_inst_old = exec_env->module_inst;
-            exec_env->module_inst = (WASMModuleInstanceCommon *)module_inst;
+            wasm_exec_env_set_module_inst(
+                exec_env, (WASMModuleInstanceCommon *)module_inst);
         }
     }
 
@@ -1267,7 +1273,7 @@ execute_free_function(WASMModuleInstance *module_inst, WASMExecEnv *exec_env,
 
     if (module_inst_old)
         /* Restore the existing exec_env's module inst */
-        exec_env->module_inst = module_inst_old;
+        wasm_exec_env_restore_module_inst(exec_env, module_inst_old);
 
     if (exec_env_created)
         wasm_exec_env_destroy(exec_env_created);
@@ -1657,6 +1663,31 @@ wasm_instantiate(WASMModule *module, WASMModuleInstance *parent,
     if (!ret) {
         LOG_DEBUG("build a sub module list failed");
         goto fail;
+    }
+#endif
+
+#if WASM_ENABLE_BULK_MEMORY != 0
+    if (module->data_seg_count > 0) {
+        module_inst->e->common.data_dropped =
+            bh_bitmap_new(0, module->data_seg_count);
+        if (module_inst->e->common.data_dropped == NULL) {
+            LOG_DEBUG("failed to allocate bitmaps");
+            set_error_buf(error_buf, error_buf_size,
+                          "failed to allocate bitmaps");
+            goto fail;
+        }
+    }
+#endif
+#if WASM_ENABLE_REF_TYPES != 0
+    if (module->table_seg_count > 0) {
+        module_inst->e->common.elem_dropped =
+            bh_bitmap_new(0, module->table_seg_count);
+        if (module_inst->e->common.elem_dropped == NULL) {
+            LOG_DEBUG("failed to allocate bitmaps");
+            set_error_buf(error_buf, error_buf_size,
+                          "failed to allocate bitmaps");
+            goto fail;
+        }
     }
 #endif
 
@@ -2206,6 +2237,13 @@ wasm_deinstantiate(WASMModuleInstance *module_inst, bool is_sub_inst)
         wasm_native_call_context_dtors((WASMModuleInstanceCommon *)module_inst);
     }
 
+#if WASM_ENABLE_BULK_MEMORY != 0
+    bh_bitmap_delete(module_inst->e->common.data_dropped);
+#endif
+#if WASM_ENABLE_REF_TYPES != 0
+    bh_bitmap_delete(module_inst->e->common.elem_dropped);
+#endif
+
     wasm_runtime_free(module_inst);
 }
 
@@ -2404,14 +2442,16 @@ wasm_dump_perf_profiling(const WASMModuleInstance *module_inst)
         }
 
         if (func_name)
-            os_printf("  func %s, execution time: %.3f ms, execution count: %d "
-                      "times\n",
-                      func_name,
-                      module_inst->e->functions[i].total_exec_time / 1000.0f,
-                      module_inst->e->functions[i].total_exec_cnt);
+            os_printf(
+                "  func %s, execution time: %.3f ms, execution count: %" PRIu32
+                " times\n",
+                func_name,
+                module_inst->e->functions[i].total_exec_time / 1000.0f,
+                module_inst->e->functions[i].total_exec_cnt);
         else
-            os_printf("  func %d, execution time: %.3f ms, execution count: %d "
-                      "times\n",
+            os_printf("  func %" PRIu32
+                      ", execution time: %.3f ms, execution count: %" PRIu32
+                      " times\n",
                       i, module_inst->e->functions[i].total_exec_time / 1000.0f,
                       module_inst->e->functions[i].total_exec_cnt);
     }
@@ -3215,16 +3255,23 @@ llvm_jit_memory_init(WASMModuleInstance *module_inst, uint32 seg_index,
 {
     WASMMemoryInstance *memory_inst;
     WASMModule *module;
-    uint8 *data = NULL;
+    uint8 *data;
     uint8 *maddr;
-    uint64 seg_len = 0;
+    uint64 seg_len;
 
     bh_assert(module_inst->module_type == Wasm_Module_Bytecode);
 
     memory_inst = wasm_get_default_memory(module_inst);
-    module = module_inst->module;
-    seg_len = module->data_segments[seg_index]->data_length;
-    data = module->data_segments[seg_index]->data;
+
+    if (bh_bitmap_get_bit(module_inst->e->common.data_dropped, seg_index)) {
+        seg_len = 0;
+        data = NULL;
+    }
+    else {
+        module = module_inst->module;
+        seg_len = module->data_segments[seg_index]->data_length;
+        data = module->data_segments[seg_index]->data;
+    }
 
     if (!wasm_runtime_validate_app_addr((WASMModuleInstanceCommon *)module_inst,
                                         dst, len))
@@ -3249,7 +3296,7 @@ llvm_jit_data_drop(WASMModuleInstance *module_inst, uint32 seg_index)
 {
     bh_assert(module_inst->module_type == Wasm_Module_Bytecode);
 
-    module_inst->module->data_segments[seg_index]->data_length = 0;
+    bh_bitmap_set_bit(module_inst->e->common.data_dropped, seg_index);
     /* Currently we can't free the dropped data segment
        as they are stored in wasm bytecode */
     return true;
@@ -3260,12 +3307,8 @@ llvm_jit_data_drop(WASMModuleInstance *module_inst, uint32 seg_index)
 void
 llvm_jit_drop_table_seg(WASMModuleInstance *module_inst, uint32 tbl_seg_idx)
 {
-    WASMTableSeg *tbl_segs;
-
     bh_assert(module_inst->module_type == Wasm_Module_Bytecode);
-
-    tbl_segs = module_inst->module->table_segments;
-    tbl_segs[tbl_seg_idx].is_dropped = true;
+    bh_bitmap_set_bit(module_inst->e->common.elem_dropped, tbl_seg_idx);
 }
 
 void
@@ -3294,7 +3337,7 @@ llvm_jit_table_init(WASMModuleInstance *module_inst, uint32 tbl_idx,
         return;
     }
 
-    if (tbl_seg->is_dropped) {
+    if (bh_bitmap_get_bit(module_inst->e->common.elem_dropped, tbl_seg_idx)) {
         jit_set_exception_with_id(module_inst, EXCE_OUT_OF_BOUNDS_TABLE_ACCESS);
         return;
     }

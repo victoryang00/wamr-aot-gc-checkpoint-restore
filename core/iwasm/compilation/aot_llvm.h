@@ -12,6 +12,7 @@
 #include "llvm-c/Target.h"
 #include "llvm-c/Core.h"
 #include "llvm-c/Object.h"
+#include "llvm-c/OrcEE.h"
 #include "llvm-c/ExecutionEngine.h"
 #include "llvm-c/Analysis.h"
 #include "llvm-c/BitWriter.h"
@@ -430,6 +431,8 @@ typedef struct AOTCompContext {
     /* Whether optimize the JITed code */
     bool optimize;
 
+    bool emit_frame_pointer;
+
     uint32 opt_level;
     uint32 size_level;
 
@@ -488,6 +491,7 @@ enum {
     AOT_LLVMIR_OPT_FILE,
 };
 
+/* always sync it with AOTCompOption in aot_export.h */
 typedef struct AOTCompOption {
     bool is_jit_mode;
     bool is_indirect_mode;
@@ -514,6 +518,7 @@ typedef struct AOTCompOption {
     uint32 bounds_checks;
     uint32 stack_bounds_checks;
     uint32 segue_flags;
+    bool linux_perf_support;
     char **custom_sections;
     uint32 custom_sections_count;
     const char *stack_usage_file;
