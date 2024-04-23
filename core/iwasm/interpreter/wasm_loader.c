@@ -14757,9 +14757,9 @@ re_scan:
                             goto fail;
                         }
 
-                        read_leb_uint32(p, p_end, mem_offset); /* offset */
+                        read_leb_mem_offset(p, p_end, mem_offset); /* offset */
 
-                        POP_AND_PUSH(VALUE_TYPE_I32, VALUE_TYPE_V128);
+                        POP_AND_PUSH(mem_offset_type, VALUE_TYPE_V128);
 #if WASM_ENABLE_JIT != 0 || WASM_ENABLE_WAMR_COMPILER != 0
                         func->has_memory_operations = true;
 #endif
@@ -14776,10 +14776,10 @@ re_scan:
                             goto fail;
                         }
 
-                        read_leb_uint32(p, p_end, mem_offset); /* offset */
+                        read_leb_mem_offset(p, p_end, mem_offset); /* offset */
 
                         POP_V128();
-                        POP_I32();
+                        POP_MEM_OFFSET();
 #if WASM_ENABLE_JIT != 0 || WASM_ENABLE_WAMR_COMPILER != 0
                         func->has_memory_operations = true;
 #endif
@@ -14994,7 +14994,7 @@ re_scan:
                             goto fail;
                         }
 
-                        read_leb_uint32(p, p_end, mem_offset); /* offset */
+                        read_leb_mem_offset(p, p_end, mem_offset); /* offset */
 
                         CHECK_BUF(p, p_end, 1);
                         lane = read_uint8(p);
@@ -15004,7 +15004,7 @@ re_scan:
                         }
 
                         POP_V128();
-                        POP_I32();
+                        POP_MEM_OFFSET();
                         if (opcode1 < SIMD_v128_store8_lane) {
                             PUSH_V128();
                         }
@@ -15025,9 +15025,9 @@ re_scan:
                             goto fail;
                         }
 
-                        read_leb_uint32(p, p_end, mem_offset); /* offset */
+                        read_leb_mem_offset(p, p_end, mem_offset); /* offset */
 
-                        POP_AND_PUSH(VALUE_TYPE_I32, VALUE_TYPE_V128);
+                        POP_AND_PUSH(mem_offset_type, VALUE_TYPE_V128);
 #if WASM_ENABLE_JIT != 0 || WASM_ENABLE_WAMR_COMPILER != 0
                         func->has_memory_operations = true;
 #endif
