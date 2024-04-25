@@ -79,7 +79,7 @@ cmake -DWAMR_BUILD_PLATFORM=linux -DWAMR_BUILD_TARGET=ARM
 #### **Enable memory64 feature**
 - **WAMR_BUILD_MEMORY64**=1/0, default to disable if not set
 
-> Note: Currently, the memory64 feature is only supported in classic interpreter running mode. 
+> Note: Currently, the memory64 feature is only supported in classic interpreter running mode and AOT mode.
 
 #### **Enable thread manager**
 - **WAMR_BUILD_THREAD_MGR**=1/0, default to disable if not set
@@ -137,7 +137,7 @@ cmake -DWAMR_BUILD_PLATFORM=linux -DWAMR_BUILD_TARGET=ARM
 #### **Enable Exception Handling**
 - **WAMR_BUILD_EXCE_HANDLING**=1/0, default to disable if not set
 
-> Note: Currently, the exception handling feature is only supported in classic interpreter running mode. 
+> Note: Currently, the exception handling feature is only supported in classic interpreter running mode.
 
 #### **Enable Garbage Collection**
 - **WAMR_BUILD_GC**=1/0, default to disable if not set
